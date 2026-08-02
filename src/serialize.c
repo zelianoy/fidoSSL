@@ -135,6 +135,11 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
             goto err;
         }
         cbor_value_calculate_string_length(&it, &p->gcm_key_len);
+        //the length of gcm_key_length should be exactly 32 bytes according to I-D
+        //the length should be checked directly after it was read from CBOR header
+        if(p->gcm_key_len!=32){
+            goto err;
+        }
         p->gcm_key = OPENSSL_zalloc(p->gcm_key_len);
         cbor_value_copy_byte_string(&it, p->gcm_key, &p->gcm_key_len, &it);
         debug_print_hex(DEBUG_LEVEL_VERBOSE, "    gcm key: ", p->gcm_key,
