@@ -119,6 +119,11 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
             goto err;
         }
         cbor_value_calculate_string_length(&it, &p->eph_user_id_len);
+        //the length of ephemereal user id should be exactly 256 bytes according to ID
+        //the length should be checked directly after it was read from CBOR header
+        if(p->eph_user_id_len!=256){
+            goto err;
+        }
         p->eph_user_id = OPENSSL_zalloc(p->eph_user_id_len);
         cbor_value_copy_byte_string(&it, p->eph_user_id, &p->eph_user_id_len,
                                     &it);
