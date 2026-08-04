@@ -16,7 +16,7 @@ int process_auth_request(const u8 *in, size_t in_len, struct ud_data *data);
 
 int process_reg_request(const u8 *in, size_t in_len, struct ud_data *data);
 
-int process_pre_request(const u8 *in, size_t in_len,
+int process_pre_response(const u8 *in, size_t in_len,
                             struct ud_data *data);
 
 int create_auth_response(struct ud_data *data, SSL *ssl, const u8 **out,

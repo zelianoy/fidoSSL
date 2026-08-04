@@ -40,8 +40,8 @@ const char *get_package_type_name(unsigned int type) {
     switch (type) {
     case PKT_PRE_INDICATION:
         return "PRE_INDICATION";
-    case PKT_PRE_REQUEST:
-        return "PRE_REQUEST";
+    case PKT_PRE_RESPONSE:
+        return "PRE_RESPONSE";
     case PKT_REG_INDICATION:
         return "REG_INDICATION";
     case PKT_REG_REQUEST:
@@ -102,12 +102,12 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
         out = NULL;
         break;
     }
-    case PKT_PRE_REQUEST: {
+    case PKT_PRE_RESPONSE: {
         if (array_len < 3) {
-            debug_printf(DEBUG_LEVEL_ERROR, "Malformed pre request");
+            debug_printf(DEBUG_LEVEL_ERROR, "Malformed pre response");
             goto err;
         }
-        struct pre_request *p = (struct pre_request *)out;
+        struct pre_response *p = (struct pre_response *)out;
         if (!p) {
             debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation failed");
             goto err;
@@ -122,6 +122,7 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
         //the length of ephemereal user id should be exactly 256 bytes according to ID
         //the length should be checked directly after it was read from CBOR header
         if(p->eph_user_id_len!=256){
+            debug_printf(DEBUG_LEVEL_ERROR, "Length of ephemeral user id is not 256 bytes");
             goto err;
         }
         p->eph_user_id = OPENSSL_zalloc(p->eph_user_id_len);
@@ -138,6 +139,7 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
         //the length of gcm_key_length should be exactly 32 bytes according to I-D
         //the length should be checked directly after it was read from CBOR header
         if(p->gcm_key_len!=32){
+            debug_printf(DEBUG_LEVEL_ERROR, "Length of gcm key is not 32 bytes");
             goto err;
         }
         p->gcm_key = OPENSSL_zalloc(p->gcm_key_len);
@@ -187,6 +189,10 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
             goto err;
         }
         cbor_value_calculate_string_length(&it, &p->gcm_user_display_name_len);
+        if(p->gcm_user_display_name_len<1||p->gcm_user_display_name_len>256){
+            debug_printf(DEBUG_LEVEL_ERROR, "Length of GCM user name is not within the allowed range");
+            goto err;
+        }
         p->gcm_user_display_name = OPENSSL_zalloc(p->gcm_user_display_name_len);
         cbor_value_copy_byte_string(&it, p->gcm_user_display_name,
                                     &p->gcm_user_display_name_len, &it);
@@ -198,6 +204,10 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
             goto err;
         }
         cbor_value_calculate_string_length(&it, &p->gcm_ticket_len);
+        if(p->gcm_ticket_len!=256){
+            debug_printf(DEBUG_LEVEL_ERROR, "Length of GCM ticket is not 256");
+            goto err;
+        }
         p->gcm_ticket = OPENSSL_zalloc(p->gcm_ticket_len);
         cbor_value_copy_byte_string(&it, p->gcm_ticket, &p->gcm_ticket_len,
                                     &it);
@@ -222,6 +232,9 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
             goto err;
         }
         cbor_value_calculate_string_length(&it, &p->challenge_len);
+        if(p->challenge_len<16||p->challenge_len>64){
+            debug_printf(DEBUG_LEVEL_ERROR, "Size of challenge is not within allowed range");
+        }
         p->challenge = OPENSSL_zalloc(p->challenge_len);
         cbor_value_copy_byte_string(&it, p->challenge, &p->challenge_len, &it);
         debug_print_hex(DEBUG_LEVEL_VERBOSE, "    challenge: ", p->challenge,
@@ -231,6 +244,10 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
             goto err;
         }
         cbor_value_calculate_string_length(&it, &len);
+        if (len<1||len>256){
+            debug_printf(DEBUG_LEVEL_ERROR, "Size of RP ID is not within allowed range");
+            goto err;
+        }
         p->rp_id = OPENSSL_zalloc(len + 1); // +1 for null terminator
         cbor_value_copy_text_string(&it, p->rp_id, &len, &it);
         debug_printf(DEBUG_LEVEL_VERBOSE, "    rp id: %s", p->rp_id);
@@ -239,6 +256,10 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
             goto err;
         }
         cbor_value_calculate_string_length(&it, &len);
+        if(len<1||len>256){
+            debug_printf(DEBUG_LEVEL_ERROR, "Size of RP name is not within allowed range");
+            goto err;
+        }
         p->rp_name = OPENSSL_zalloc(len + 1); // +1 for null terminator
         cbor_value_copy_text_string(&it, p->rp_name, &len, &it);
         debug_printf(DEBUG_LEVEL_VERBOSE, "    rp name: %s", p->rp_name);
@@ -260,6 +281,8 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
             goto err;
         }
         cbor_value_calculate_string_length(&it, &p->gcm_user_display_name_len);
+        //TODO implement checking the length of encrypted data and maybe additionally
+        //do something with encryption???
         p->gcm_user_display_name = OPENSSL_zalloc(p->gcm_user_display_name_len);
         cbor_value_copy_byte_string(&it, p->gcm_user_display_name,
                                     &p->gcm_user_display_name_len, &it);
@@ -683,13 +706,21 @@ int cbor_build(const void *input, enum packet_type type, const u8 **out_buf,
         cbor_encode_int(&array, PKT_PRE_INDICATION);
         break;
     }
-    case PKT_PRE_REQUEST: {
-        struct pre_request *in = (struct pre_request *)input;
+    case PKT_PRE_RESPONSE: {
+        struct pre_response *in = (struct pre_response *)input;
         assert(in->eph_user_id != NULL && in->eph_user_id_len != 0 &&
                in->gcm_key != NULL && in->gcm_key_len != 0);
+        if(in->eph_user_id_len!=256){
+            debug_printf(DEBUG_LEVEL_ERROR, "Length of ephemeral user id is not 256 bytes");
+            goto err;
+        }
+        if(in->gcm_key_len != 32){
+            debug_printf(DEBUG_LEVEL_ERROR, "Length of gcm key is not 32 bytes");
+            goto err;
+        }
         // Required fields are packet type, eph_user_id and gcm_key
         cbor_encoder_create_array(&encoder, &array, 3);
-        cbor_encode_int(&array, PKT_PRE_REQUEST);
+        cbor_encode_int(&array, PKT_PRE_RESPONSE);
         cbor_encode_byte_string(&array, in->eph_user_id, in->eph_user_id_len);
         debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE,
                         "    eph user id: ", in->eph_user_id,

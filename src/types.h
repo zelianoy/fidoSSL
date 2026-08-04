@@ -44,8 +44,8 @@ enum fido_state {
     STATE_REG_INITIAL,
     STATE_PRE_INDICATION_SENT,
     STATE_PRE_INDICATION_RECEIVED,
-    STATE_PRE_REQUEST_SENT,
-    STATE_PRE_REQUEST_RECEIVED,
+    STATE_PRE_RESPONSE_SENT,
+    STATE_PRE_RESPONSE_RECEIVED,
     STATE_REG_INDICATION_SENT,
     STATE_REG_INDICATION_RECEIVED,
     STATE_REG_REQUEST_SENT,
@@ -59,7 +59,8 @@ enum fido_state {
 enum packet_type {
     UNDEFINED = 0,
     PKT_PRE_INDICATION = 1,
-    PKT_PRE_REQUEST = 2,
+    //change of the name, according to I-D
+    PKT_PRE_RESPONSE = 2,
     PKT_REG_INDICATION = 3,
     PKT_REG_REQUEST = 4,
     PKT_REG_RESPONSE = 5,
@@ -195,8 +196,8 @@ struct auth_response {
     u8 *cred_id;
     size_t cred_id_len;
 };
-
-struct pre_request {
+//change of the name, according to the I-D
+struct pre_response {
     // Required fields
     u8 * eph_user_id;
     size_t eph_user_id_len;
@@ -259,7 +260,8 @@ void free_auth_request(struct auth_request *auth_request);
 
 void free_auth_response(struct auth_response *auth_response);
 
-void free_pre_request(struct pre_request *pre_request);
+//change of the name, according to the I-D
+void free_pre_response(struct pre_response *pre_response);
 
 void free_reg_indication(struct reg_indication *reg_indication);
 

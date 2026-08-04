@@ -45,7 +45,7 @@ int fidossl_client_add_cb(
             }
             data->state = STATE_PRE_INDICATION_SENT;
             break;
-        case STATE_PRE_REQUEST_RECEIVED:
+        case STATE_PRE_RESPONSE_RECEIVED:
             if (create_reg_indication(data, out, outlen) != 0) {
                 debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to create registration indication");
                 ERR_put_error(ERR_LIB_USER, 0, SSL_AD_INTERNAL_ERROR, __FILE__, __LINE__);
@@ -95,7 +95,7 @@ int fidossl_client_add_cb(
         // for the server certificate and then for the certificate request,
         // the following 3 states are ignored
         case STATE_REG_RESPONSE_SENT:
-        case STATE_PRE_REQUEST_RECEIVED:
+        case STATE_PRE_RESPONSE_RECEIVED:
         case STATE_AUTH_RESPONSE_SENT:
             return 0;
         default:
@@ -131,13 +131,13 @@ int fidossl_client_parse_cb(
 
         switch (data->state) {
             case STATE_PRE_INDICATION_SENT:
-                if (process_pre_request(in, inlen, data) != 0) {
+                if (process_pre_response(in, inlen, data) != 0) {
                     debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to process pre registration request");
                     ERR_put_error(ERR_LIB_USER, 0, SSL_AD_ACCESS_DENIED, __FILE__, __LINE__);
                     *al = SSL_AD_ACCESS_DENIED;
                     return -1;
                 }
-                data->state = STATE_PRE_REQUEST_RECEIVED;
+                data->state = STATE_PRE_RESPONSE_RECEIVED;
                 // Now, a second handshake is necessary to complete the
                 // registration.
                 break;
@@ -199,13 +199,13 @@ int fidossl_server_add_cb(
         }
         switch (data->state) {
             case STATE_PRE_INDICATION_RECEIVED:
-                if (create_pre_request(data, out, outlen) != 0) {
+                if (create_pre_response(data, out, outlen) != 0) {
                     debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to create pre registration request");
                     ERR_put_error(ERR_LIB_USER, 0, SSL_AD_ACCESS_DENIED, __FILE__, __LINE__);
                     *al = SSL_AD_ACCESS_DENIED;
                     return -1;
                 }
-                data->state = STATE_PRE_REQUEST_SENT;
+                data->state = STATE_PRE_RESPONSE_SENT;
                 break;
             case STATE_REG_INDICATION_RECEIVED:
                 if (create_reg_request(data, out, outlen) != 0) {

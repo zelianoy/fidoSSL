@@ -640,10 +640,11 @@ int verify_authdata(struct rp_data *data, struct authdata *authdata,
     return 0;
 }
 
-int create_pre_request(struct rp_data *data, const u8 **out,
+int create_pre_response(struct rp_data *data, const u8 **out,
                            size_t *out_len) {
     // Create a 16 byte random ephemeral user id
-    data->eph_user_id_len = 16;
+    // Changed the 16 byte ephemeral user id to 256, according to the I-D specification
+    data->eph_user_id_len = 256;
     if (create_random_bytes(data->eph_user_id_len, &data->eph_user_id) != 0) {
         debug_printf(DEBUG_LEVEL_ERROR, "Failed to create random bytes");
         return -1;
@@ -659,14 +660,14 @@ int create_pre_request(struct rp_data *data, const u8 **out,
     debug_printf(DEBUG_LEVEL_MORE_VERBOSE,
                  "Created a GCM key from random bytes");
     // Prepare the request packet
-    struct pre_request packet;
-    memset(&packet, 0, sizeof(struct pre_request));
+    struct pre_response packet;
+    memset(&packet, 0, sizeof(struct pre_response));
     packet.eph_user_id = data->eph_user_id;
     packet.eph_user_id_len = data->eph_user_id_len;
     packet.gcm_key = data->gcm_key;
     packet.gcm_key_len = data->gcm_key_len;
 
-    return cbor_build(&packet, PKT_PRE_REQUEST, out, out_len);
+    return cbor_build(&packet, PKT_PRE_RESPONSE, out, out_len);
 }
 
 int create_reg_request(struct rp_data *data, const u8 **out,
@@ -815,7 +816,7 @@ int process_indication(const u8 *in, size_t in_len, struct rp_data *data) {
     // Pre indication has no data. We simply set the new state
     if (data->state == STATE_INITIAL && type == PKT_PRE_INDICATION) {
         data->state = STATE_PRE_INDICATION_RECEIVED;
-    } else if (data->state == STATE_PRE_REQUEST_SENT &&
+    } else if (data->state == STATE_PRE_RESPONSE_SENT &&
                type == PKT_REG_INDICATION) {
         // The reg indication consists of the ephemeral user ID. We must check
         // if the client provided the correct ephemeral user id.

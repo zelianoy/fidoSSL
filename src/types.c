@@ -62,13 +62,13 @@ void free_auth_response(struct auth_response *auth_response) {
     OPENSSL_free(auth_response);
 }
 
-void free_pre_request(struct pre_request *pre_request) {
-    if (pre_request == NULL) {
+void free_pre_response(struct pre_response *pre_response) {
+    if (pre_response == NULL) {
         return;
     }
-    OPENSSL_free(pre_request->eph_user_id);
-    OPENSSL_free(pre_request->gcm_key);
-    OPENSSL_free(pre_request);
+    OPENSSL_free(pre_response->eph_user_id);
+    OPENSSL_free(pre_response->gcm_key);
+    OPENSSL_free(pre_response);
 }
 
 void free_reg_indication(struct reg_indication *reg_indication) {

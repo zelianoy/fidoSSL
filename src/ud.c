@@ -794,14 +794,14 @@ int create_auth_response(struct ud_data *data, SSL *ssl, const u8 **out,
     return cbor_build(&packet, PKT_AUTH_RESPONSE, out, out_len);
 }
 
-int process_pre_request(const u8 *in, size_t in_len,
+int process_pre_response(const u8 *in, size_t in_len,
                             struct ud_data *data) {
     if (in == NULL || in_len == 0 || data == NULL) {
         return -1;
     }
-    struct pre_request packet;
+    struct pre_response packet;
     memset(&packet, 0, sizeof(packet));
-    enum packet_type type = PKT_PRE_REQUEST;
+    enum packet_type type = PKT_PRE_RESPONSE;
     if (cbor_parse(in, in_len, &type, &packet) != 0) {
         debug_printf(DEBUG_LEVEL_ERROR,
                      "Failed to parse pre request");
