@@ -43,11 +43,11 @@ struct ud_data *init_ud(SSL *ssl, void *add_arg) {
         return NULL;
     }
     if (opts->mode == FIDOSSL_REGISTER &&
-        (opts->ticket_b64 == NULL || opts->user_name == NULL ||
+        (opts->ticket_b64 == NULL || opts->user_display_name == NULL ||
          opts->pin == NULL)) {
         debug_printf(
             DEBUG_LEVEL_ERROR,
-            "FIDOSSL: A user id, pin and ticket must be set for registration");
+            "FIDOSSL: A user display name, pin and ticket must be set for registration");
         return NULL;
     }
     // Create the user device data
@@ -70,22 +70,13 @@ struct ud_data *init_ud(SSL *ssl, void *add_arg) {
                          "Failed to base64 decode the ticket");
             return NULL;
         }
-        data->user_name = OPENSSL_zalloc(strlen(opts->user_name) + 1);
-        memcpy(data->user_name, opts->user_name, strlen(opts->user_name));
-        debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    User name: %s",
-                     data->user_name);
-        if (opts->user_display_name) {
-            data->user_display_name =
-                OPENSSL_zalloc(strlen(opts->user_display_name) + 1);
-            memcpy(data->user_display_name, opts->user_display_name,
-                   strlen(opts->user_display_name));
-            debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    User display name: %s",
-                         data->user_display_name);
-        } else {
-            debug_printf(
-                DEBUG_LEVEL_MORE_VERBOSE,
-                "    User display name not set. Falling back to user name");
-        }
+
+    data->user_name = NULL;
+    data->user_display_name =
+            OPENSSL_zalloc(strlen(opts->user_display_name) + 1);
+    memcpy(data->user_display_name, opts->user_display_name, strlen(opts->user_display_name));
+    debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    User display name: %s", data->user_display_name);
+
     } else if (opts->mode == FIDOSSL_AUTHENTICATE) {
         debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    Mode: Authentication");
         data->state = STATE_AUTH_INITIAL;
@@ -302,7 +293,7 @@ fido_cred_t *create_fido_cred_t(struct ud_data *data) {
         return NULL;
     }
     debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE, "    User ID: ", data->user_id,
-                    data->user_id_len);
+                 data->user_id_len);
     debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    User name: %s",
                  data->user_name);
     debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    User display name: %s",
@@ -310,7 +301,7 @@ fido_cred_t *create_fido_cred_t(struct ud_data *data) {
 
     // For now, we only support ES256 but other algorithms can be added
     // in the future
-    int cose_alg = data->cred_params[0];
+    int cose_alg = data->pub_key_cred_params[0].alg;
     if (fido_cred_set_type(cred, cose_alg) != FIDO_OK) {
         debug_printf(DEBUG_LEVEL_ERROR,
                      "Failed to set cred param in fido_cred_t");
@@ -335,7 +326,7 @@ fido_cred_t *create_fido_cred_t(struct ud_data *data) {
                     SHA256_DIGEST_LENGTH);
 
     // Set discoverable credentials
-    if (data->resident_key == REQUIRED || data->resident_key == PREFERRED) {
+    if (data->resident_key == RK_REQUIRED || data->resident_key == RK_PREFERRED) {
         if (fido_cred_set_rk(cred, FIDO_OPT_TRUE) != FIDO_OK) {
             debug_printf(DEBUG_LEVEL_ERROR, "Failed to request resident key");
             fido_cred_free(&cred);
@@ -349,8 +340,8 @@ fido_cred_t *create_fido_cred_t(struct ud_data *data) {
     }
     // Set user verification
     int uv = FIDO_OPT_OMIT;
-    if (data->user_verification == REQUIRED ||
-        data->user_verification == PREFERRED) {
+    if (data->user_verification == UV_REQUIRED ||
+        data->user_verification == UV_PREFERRED) {
         uv = FIDO_OPT_TRUE;
         debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    User verification: TRUE");
     } else {
@@ -366,10 +357,10 @@ fido_cred_t *create_fido_cred_t(struct ud_data *data) {
     // Platform authenticator are not supported for now
     debug_printf(DEBUG_LEVEL_MORE_VERBOSE,
                  "    Authenticator attachment: CROSS_PLATFORM");
-
+    //TODO: Implementing a validation of excluded credentials list
     // Set excluded credentials
-    for (size_t i = 0; i < data->exclude_creds_len; i++) {
-        struct credential *excl_cred = &data->exclude_creds[i];
+    for (size_t i = 0; i < data->exclude_credentials_len; i++) {
+        struct public_key_credential_descriptor *excl_cred = &data->exclude_credentials[i];
         if (fido_cred_exclude(cred, excl_cred->id, excl_cred->id_len) != FIDO_OK) {
             debug_printf(DEBUG_LEVEL_ERROR, "Failed to exclude credential ID");
             fido_cred_free(&cred);
@@ -378,7 +369,6 @@ fido_cred_t *create_fido_cred_t(struct ud_data *data) {
         debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Credential ID excluded: ");
         debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE, "    Excluded Credential ID: ", excl_cred->id, excl_cred->id_len);
     }
-
     return cred;
 }
 
@@ -414,8 +404,8 @@ fido_assert_t *create_fido_assert_t(struct ud_data *data) {
     // If the server wishes to require user verification, set the user
     // verification
     if (data->user_verification) {
-        if (data->user_verification == PREFERRED ||
-            data->user_verification == REQUIRED) {
+        if (data->user_verification == UV_PREFERRED ||
+            data->user_verification == UV_REQUIRED) {
             uv = FIDO_OPT_TRUE;
         } else {
             uv = FIDO_OPT_FALSE;
@@ -648,38 +638,99 @@ int create_pre_indication(struct ud_data *data, const u8 **out,
     return 0;
 }
 
-int create_reg_indication(struct ud_data *data, const u8 **out,
-                          size_t *out_len) {
-    assert(data->eph_user_id != NULL && data->eph_user_id_len != 0);
+int create_reg_indication(struct ud_data *data, const u8 **out, size_t *out_len) {
+
     struct reg_indication packet;
     memset(&packet, 0, sizeof(packet));
+    
+   /*Define local variables and local structure for the encrypted_data CBOR array*/
+    u8 *padded_user_display_name = NULL;
+    const size_t padded_user_display_name_len = 256;
+    struct encrypted_data encrypted_data = {0};
+    u8 *inner_cbor_out = NULL;
+    size_t inner_cbor_out_len = 0;
+    u8 *ciphertext_out = NULL;
+    size_t ciphertext_out_len = 0;
+    int result;
+    if(data->eph_user_id == NULL){
+        debug_printf(DEBUG_LEVEL_ERROR, "The ephemeral user id is empty");
+        goto err;
+    }
+
+    if(data->eph_user_id_len!=256){
+        debug_printf(DEBUG_LEVEL_ERROR, "The length of ephemeral user id is not 256 bytes");
+        goto err;
+    }
     packet.eph_user_id = data->eph_user_id;
     packet.eph_user_id_len = data->eph_user_id_len;
+ 
+    if(data->user_display_name == NULL){
+        goto err;
+    }
 
-    // User name, user display name and user ticket are encrypted with the AES-GCM
-    // key.
-    if (aes_gcm_encrypt((u8 *)data->user_name, strlen(data->user_name),
-                    &packet.gcm_user_name, &packet.gcm_user_name_len,
-                    data->gcm_key, data->gcm_key_len) != 0) {
-        debug_printf(DEBUG_LEVEL_ERROR, "Failed to aes-gcm encrypt user name");
-        return -1;
-                    }
-    if (aes_gcm_encrypt(
-            (u8 *)data->user_display_name, strlen(data->user_display_name),
-            &packet.gcm_user_display_name, &packet.gcm_user_display_name_len,
-            data->gcm_key, data->gcm_key_len) != 0) {
-        debug_printf(DEBUG_LEVEL_ERROR,
-                     "Failed to aes-gcm encrypt user display name");
-        return -1;
-            }
-    if (aes_gcm_encrypt(data->ticket, data->ticket_len, &packet.gcm_ticket,
-                        &packet.gcm_ticket_len, data->gcm_key,
-                        data->gcm_key_len) != 0) {
-        debug_printf(DEBUG_LEVEL_ERROR, "Failed to aes-gcm encrypt user id");
-        return -1;
-                        }
-    return cbor_build(&packet, PKT_REG_INDICATION, out, out_len);
+    data->user_display_name_len = strlen(data->user_display_name);
+
+    if(data->user_display_name_len>256 || data->user_display_name_len<1){
+        goto err;
+    }
+
+    
+    padded_user_display_name = OPENSSL_zalloc(padded_user_display_name_len);
+    if(padded_user_display_name == NULL){
+        debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation for padded display name failed");
+        goto err;
+    }
+
+    if(bit_padding(padded_user_display_name, data->user_display_name, 
+        data->user_display_name_len) != 0){
+        debug_printf(DEBUG_LEVEL_ERROR, "Failed to pad user display name");
+        goto err;     
+    }
+
+    if(data->ticket == NULL || data->ticket_len != 256){
+        goto err;
+    }
+
+
+    encrypted_data.padded_user_display_name = padded_user_display_name;
+    encrypted_data.padded_user_display_name_len = padded_user_display_name_len;
+    encrypted_data.ticket = data->ticket;
+    encrypted_data.ticket_len = data->ticket_len;
+    if(cbor_build_encrypted_data(&encrypted_data, &inner_cbor_out, &inner_cbor_out_len)!=0){
+        debug_printf(DEBUG_LEVEL_ERROR, "Failed creating a CBOR array");
+        goto err;
+    }
+
+
+    if(aes_gcm_encrypt(inner_cbor_out, inner_cbor_out_len,
+        &ciphertext_out, &ciphertext_out_len, data->gcm_key, data->gcm_key_len) != 0){
+        debug_printf(DEBUG_LEVEL_ERROR, "Failed to aes-gcm encrypt the cbor array");
+        goto err;
+    }
+
+
+    packet.encrypted_data = ciphertext_out;
+    packet.encrypted_data_len = ciphertext_out_len;
+    result = cbor_build(&packet, PKT_REG_INDICATION, out, out_len);
+    
+
+    OPENSSL_free(padded_user_display_name);
+    OPENSSL_free(inner_cbor_out);
+    free(ciphertext_out);
+    return result;
+
+    err: 
+       OPENSSL_free(padded_user_display_name);
+       OPENSSL_free(inner_cbor_out);
+       free(ciphertext_out);     
+       return -1;    
 }
+
+
+
+
+
+
 
 int create_reg_response(struct ud_data *data, SSL *ssl, const u8 **out,
                         size_t *out_len) {
@@ -804,7 +855,7 @@ int process_pre_response(const u8 *in, size_t in_len,
     enum packet_type type = PKT_PRE_RESPONSE;
     if (cbor_parse(in, in_len, &type, &packet) != 0) {
         debug_printf(DEBUG_LEVEL_ERROR,
-                     "Failed to parse pre request");
+                     "Failed to parse pre response");
         return -1;
     }
     // Copy pointers. We can reuse the allocated memory.
@@ -817,7 +868,7 @@ int process_pre_response(const u8 *in, size_t in_len,
     return 0;
 }
 
-int process_reg_request(const u8 *in, size_t in_len, struct ud_data *data) {
+ int process_reg_request(const u8 *in, size_t in_len, struct ud_data *data) {
     if (in == NULL || in_len == 0 || data == NULL) {
         return -1;
     }
@@ -828,67 +879,97 @@ int process_reg_request(const u8 *in, size_t in_len, struct ud_data *data) {
         debug_printf(DEBUG_LEVEL_ERROR, "Failed to parse registration request");
         return -1;
     }
+
     assert(data->gcm_key != NULL);
-    assert(data->gcm_key_len != 0);
-    // Decrypt the user name
-    u8 *user_name;
-    size_t user_name_len;
-    if (aes_gcm_decrypt(packet.gcm_user_name, packet.gcm_user_name_len,
-                        &user_name, &user_name_len, data->gcm_key,
-                        data->gcm_key_len) != 0) {
-        debug_printf(DEBUG_LEVEL_ERROR, "Failed to decrypt user name");
+    assert(data->gcm_key_len == 32);
+   //TODO: Asserts durch Laufzeitprüfungen ersertzen
+
+
+    u8 *cbor_array_decrypted;
+    size_t cbor_array_decrypted_len;
+    struct reg_request_encrypted_data encrypted_data = {0};
+
+    if (aes_gcm_decrypt(packet.encrypted_data, packet.encrypted_data_len, &cbor_array_decrypted,
+                       &cbor_array_decrypted_len, data->gcm_key, data->gcm_key_len)!=0){
+        debug_printf(DEBUG_LEVEL_ERROR, "Failed to decrypt CBOR array");
         return -1;
     }
-    // Check if the user name is the name of the user who initiated the
-    // registration process
-    if (user_name_len != strlen(data->user_name) ||
-        memcmp(user_name, data->user_name, strlen(data->user_name)) != 0) {
-        debug_printf(DEBUG_LEVEL_ERROR,
-                     "User name does not match the user who initiated the "
+    
+    if(cbor_parse_reg_request_encrypted_data(cbor_array_decrypted, cbor_array_decrypted_len, &encrypted_data)!=0){
+        debug_printf(DEBUG_LEVEL_ERROR, "Parsing the CBOR array failed" );
+        return -1;
+    }        
+    
+    char *unpadded_user_name = OPENSSL_malloc(257 * sizeof(*unpadded_user_name));
+    size_t unpadded_user_name_len = 0;
+
+    if(remove_bit_padding(unpadded_user_name, encrypted_data.padded_user_name, &unpadded_user_name_len)!=0){
+        debug_printf(DEBUG_LEVEL_ERROR, "Removing the padding for user_name failed");
+        return -1;
+    }
+
+    char *unpadded_user_display_name = OPENSSL_malloc(257 * sizeof(*unpadded_user_display_name));
+    size_t unpadded_user_display_name_len = 0;
+
+    if(remove_bit_padding(unpadded_user_display_name, encrypted_data.padded_user_display_name, &unpadded_user_display_name_len)!=0){
+        debug_printf(DEBUG_LEVEL_ERROR, "Removing the padding from user_display_name failed");
+        return -1;
+    }
+  
+
+
+    if(data->user_display_name_len != unpadded_user_display_name_len || 
+       memcmp(data->user_display_name, unpadded_user_display_name, unpadded_user_display_name_len)!=0){
+       debug_printf(DEBUG_LEVEL_ERROR,
+                     "User display name does not match the user who initiated the "
                      "registration process");
         return -1;
-    }
-    debug_printf(DEBUG_LEVEL_MORE_VERBOSE,
-                 "User name matches the user who "
+       }
+       debug_printf(DEBUG_LEVEL_MORE_VERBOSE,
+                 "User display name matches the user who "
                  "initiated the registration process");
-    // Decrypt the user id and store it
-    if (aes_gcm_decrypt(packet.gcm_user_id, packet.gcm_user_id_len,
-                        &data->user_id, &data->user_id_len, data->gcm_key,
-                        data->gcm_key_len) != 0) {
-        debug_printf(DEBUG_LEVEL_ERROR, "Failed to decrypt user id");
-        return -1;
+
+    
+    data->user_name = unpadded_user_name;
+    data->user_id = encrypted_data.user_id;
+    data->user_id_len = encrypted_data.user_id_len;
+    if (encrypted_data.exclude_credentials_len != 0 && encrypted_data.exclude_credentials) {
+        data->exclude_credentials = encrypted_data.exclude_credentials;
+        data->exclude_credentials_len = encrypted_data.exclude_credentials_len;
     }
-    debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE,
-                    "Decrypted user id: ", data->user_id, data->user_id_len);
 
     // Store the remaining data
     data->challenge = packet.challenge;
     data->challenge_len = packet.challenge_len;
     data->rp_id = packet.rp_id;
     data->rp_name = packet.rp_name;
-    data->cred_params = packet.pubkey_cred_params;
-    data->cred_params_len = packet.pubkey_cred_params_len;
+    data->pub_key_cred_params = packet.pub_key_cred_params;
+    data->pub_key_cred_params_len = packet.pub_key_cred_params_len;
 
     // Optional fields
     if (packet.timeout) {
         data->timeout = packet.timeout;
     }
-    if (packet.auth_sel.attachment != 0 && packet.auth_sel.resident_key != 0 &&
-        packet.auth_sel.user_verification != 0) {
+
+    if(packet.auth_sel.attachment!=0){
         data->auth_attach = packet.auth_sel.attachment;
+    }
+    if(packet.auth_sel.resident_key != 0){
         data->resident_key = packet.auth_sel.resident_key;
+    }
+    if(packet.auth_sel.user_verification != 0){
         data->user_verification = packet.auth_sel.user_verification;
     }
-    if (packet.exclude_creds_len != 0 && packet.exclude_creds) {
-        data->exclude_creds = packet.exclude_creds;
-        data->exclude_creds_len = packet.exclude_creds_len;
-    }
-    // Free unneeded memory
-    OPENSSL_free(user_name);
-    OPENSSL_free(packet.gcm_user_name);
-    OPENSSL_free(packet.gcm_user_display_name);
-    OPENSSL_free(packet.gcm_user_id);
 
+    if(packet.attestation != 0){
+        data->attestation = packet.attestation;
+    }
+
+    if(packet.extensions != NULL && packet.extensions_len>0){
+        data->extensions = packet.extensions;
+        data->extensions_len = packet.extensions_len;
+    }  
+    // TODO: Free unneeded memory
     return 0;
 }
 

@@ -175,9 +175,9 @@ int update_sign_count(sqlite3 *db, const u8 *cred_id, size_t cred_id_len,
     sqlite3_finalize(stmt);
     return 0;
 }
-
-int get_exluded_credentials(sqlite3 *db, const u8 *user_id, size_t user_id_len,
-                            struct credential **creds, size_t *creds_len) {
+//TODO: Anpassung der Name von Funktion zu get_excluded_credentials
+int get_excluded_credential_descriptors(sqlite3 *db, const u8 *user_id, size_t user_id_len,
+                            struct public_key_credential_descriptor **creds, size_t *creds_len) {
     const char *sql = "SELECT cred_id, type, transports "
                       "FROM credentials WHERE user_id == ?";
     sqlite3_stmt *stmt;
@@ -193,8 +193,8 @@ int get_exluded_credentials(sqlite3 *db, const u8 *user_id, size_t user_id_len,
     sqlite3_bind_blob(stmt, 1, user_id, user_id_len, SQLITE_STATIC);
 
     while (sqlite3_step(stmt) == SQLITE_ROW) {
-        *creds = realloc(*creds, (*creds_len + 1) * sizeof(struct credential));
-        struct credential *cred = &(*creds)[*creds_len];
+        *creds = realloc(*creds, (*creds_len + 1) * sizeof(struct public_key_credential_descriptor));
+        struct public_key_credential_descriptor *cred = &(*creds)[*creds_len];
 
         // Assuming `id` is the first column
         size_t id_len = sqlite3_column_bytes(stmt, 0);
@@ -202,7 +202,21 @@ int get_exluded_credentials(sqlite3 *db, const u8 *user_id, size_t user_id_len,
         memcpy(cred->id, sqlite3_column_blob(stmt, 0), id_len);
         cred->id_len = id_len;
 
-        cred->type = strdup((const char *)sqlite3_column_text(stmt, 1));
+      
+        if(sqlite3_column_type(stmt, 1) != SQLITE_TEXT){
+            return -1;
+        }
+        int type_len = sqlite3_column_bytes(stmt, 1);
+        if(type_len != strlen("public-key")){
+            return -1;
+        }
+        if(memcmp(sqlite3_column_text(stmt, 1), "public-key", type_len)!=0){
+            return -1;
+        }
+        cred->type = PUBLIC_KEY;   
+        //Zuerst bewusst die Transport-Liste weglassen, weil die standartkonforme Entwicklung mit einem YubiKy erwartet wird
+        cred->transports_len = 0;
+        cred->transports = NULL;
         (*creds_len)++;
     }
     debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Number of excluded credentials: %zu",

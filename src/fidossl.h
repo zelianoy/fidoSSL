@@ -33,6 +33,8 @@ typedef struct fidossl_client_opts {
         FIDOSSL_REGISTER,
         FIDOSSL_AUTHENTICATE,
     } mode;
+//In the I-D the RP is choosing the user name, thus we wont use this field anymore soon. Temporary the field stays there but wont be used
+//
     char *user_name;
     char *user_display_name;
     char *ticket_b64;
@@ -44,8 +46,8 @@ typedef struct fidossl_server_opts {
     char *rp_id;
     char *rp_name;
     char *ticket_b64;
-    POLICY user_verification;
-    POLICY resident_key;
+    USER_VERIF_REQ user_verification;
+    RESIDENT_KEY_REQ resident_key;
     AUTH_ATTACH auth_attach;
     TRANSPORT transport;
     size_t timeout;

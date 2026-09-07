@@ -1,6 +1,6 @@
 #include "types.h"
 #include <openssl/crypto.h>
-
+//TODO: Speicherbereinigung vervollständigen
 void free_rp_data(struct rp_data *rp_data) {
     OPENSSL_free(rp_data->challenge);
     OPENSSL_free(rp_data->rp_id);
@@ -28,18 +28,17 @@ void free_ud_data(struct ud_data *ud_data) {
     OPENSSL_free(ud_data->gcm_key);
     OPENSSL_free(ud_data->cred_id);
     OPENSSL_free(ud_data->ticket);
-    if (ud_data->exclude_creds != NULL && ud_data->exclude_creds_len > 0) {
-        for (size_t i = 0; i < ud_data->exclude_creds_len; i++) {
-            OPENSSL_free(ud_data->exclude_creds[i].type);
-            OPENSSL_free(ud_data->exclude_creds[i].id);
-            OPENSSL_free(ud_data->exclude_creds[i].transports);
-            OPENSSL_free(ud_data->exclude_creds[i].pubkey_cose);
+    if (ud_data->exclude_credentials != NULL && ud_data->exclude_credentials_len > 0) {
+        for (size_t i = 0; i < ud_data->exclude_credentials_len; i++) {
+            OPENSSL_free(ud_data->exclude_credentials[i].id);
+            OPENSSL_free(ud_data->exclude_credentials[i].transports);
+            //OPENSSL_free(ud_data->exclude_credentials[i].pubkey_cose);
         }
     }
-    OPENSSL_free(ud_data->exclude_creds);
+    OPENSSL_free(ud_data->exclude_credentials);
     OPENSSL_free(ud_data->pin);
     OPENSSL_free(ud_data->origin);
-    OPENSSL_free(ud_data->cred_params);
+    OPENSSL_free(ud_data->pub_key_cred_params);
 }
 
 void free_auth_request(struct auth_request *auth_request) {
@@ -76,6 +75,7 @@ void free_reg_indication(struct reg_indication *reg_indication) {
         return;
     }
     OPENSSL_free(reg_indication->eph_user_id);
+    OPENSSL_free(reg_indication->encrypted_data);
     OPENSSL_free(reg_indication);
 }
 
@@ -86,18 +86,8 @@ void free_reg_request(struct reg_request *reg_request) {
     OPENSSL_free(reg_request->challenge);
     OPENSSL_free(reg_request->rp_id);
     OPENSSL_free(reg_request->rp_name);
-    OPENSSL_free(reg_request->gcm_user_name);
-    OPENSSL_free(reg_request->gcm_user_display_name);
-    OPENSSL_free(reg_request->gcm_user_id);
-    OPENSSL_free(reg_request->pubkey_cred_params);
-    if (reg_request->exclude_creds != NULL && reg_request->exclude_creds_len > 0) {
-        for (size_t i = 0; i < reg_request->exclude_creds_len; i++) {
-            OPENSSL_free(reg_request->exclude_creds[i].type);
-            OPENSSL_free(reg_request->exclude_creds[i].id);
-            OPENSSL_free(reg_request->exclude_creds[i].transports);
-        }
-    }
-    OPENSSL_free(reg_request->exclude_creds);
+
+    OPENSSL_free(reg_request->pub_key_cred_params);
     OPENSSL_free(reg_request);
 }
 

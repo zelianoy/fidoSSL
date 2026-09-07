@@ -74,20 +74,18 @@ struct rp_data *init_rp(SSL *ssl, void *server_opts) {
             OPENSSL_free(data);
             return NULL;
         }
-        debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE, "    Ticket: ", data->ticket,
-                        data->ticket_len);
     }
 
     // Optional data has a default value if not set in the server options
     if (opts->user_verification != 0) {
         data->user_verification = opts->user_verification;
         debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    User verification: %s",
-                     get_action_policy_name(opts->user_verification));
+                     get_user_verification_requirements_name(opts->user_verification));
     }
     if (opts->resident_key != 0) {
         data->resident_key = opts->resident_key;
         debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    Resident key: %s",
-                     get_action_policy_name(opts->resident_key));
+                     get_resident_key_requirements_name(opts->resident_key));
     }
     if (opts->auth_attach != 0) {
         data->auth_attach = opts->auth_attach;
@@ -614,7 +612,7 @@ int verify_authdata(struct rp_data *data, struct authdata *authdata,
     debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    Sign count was increased");
 
     // If the user is required to be verified
-    if (data->user_verification == REQUIRED) {
+    if (data->user_verification == UV_REQUIRED) {
         // But not performed
         if (!(authdata->flags & (1 << 2))) {
             debug_printf(
@@ -642,8 +640,7 @@ int verify_authdata(struct rp_data *data, struct authdata *authdata,
 
 int create_pre_response(struct rp_data *data, const u8 **out,
                            size_t *out_len) {
-    // Create a 16 byte random ephemeral user id
-    // Changed the 16 byte ephemeral user id to 256, according to the I-D specification
+    // Relying Party creates a 256 byte ephemeral user ID, according to I-D, Section 12.2
     data->eph_user_id_len = 256;
     if (create_random_bytes(data->eph_user_id_len, &data->eph_user_id) != 0) {
         debug_printf(DEBUG_LEVEL_ERROR, "Failed to create random bytes");
@@ -659,7 +656,7 @@ int create_pre_response(struct rp_data *data, const u8 **out,
     }
     debug_printf(DEBUG_LEVEL_MORE_VERBOSE,
                  "Created a GCM key from random bytes");
-    // Prepare the request packet
+    // Prepare the response packet
     struct pre_response packet;
     memset(&packet, 0, sizeof(struct pre_response));
     packet.eph_user_id = data->eph_user_id;
@@ -669,9 +666,14 @@ int create_pre_response(struct rp_data *data, const u8 **out,
 
     return cbor_build(&packet, PKT_PRE_RESPONSE, out, out_len);
 }
-
+//TODO!
 int create_reg_request(struct rp_data *data, const u8 **out,
                        size_t *out_len) {
+    struct reg_request packet;
+    memset(&packet, 0, sizeof(struct reg_request));
+
+    packet.rp_id = data->rp_id;
+    packet.rp_name = data->rp_name;
     // Create a challenge and save it to the rp_data struct
     data->challenge_len = 32; // 256 bits
     if (create_random_bytes(data->challenge_len, &data->challenge) != 0) {
@@ -681,6 +683,30 @@ int create_reg_request(struct rp_data *data, const u8 **out,
     debug_printf(DEBUG_LEVEL_MORE_VERBOSE,
                  "Created a challenge from random bytes");
 
+    packet.challenge = data->challenge;
+    packet.challenge_len = data->challenge_len;
+
+
+    packet.pub_key_cred_params = OPENSSL_malloc(sizeof(*packet.pub_key_cred_params));
+    if(packet.pub_key_cred_params == NULL){
+        return -1;
+    }
+    //TODO: Implement all of the other 6 COSE Algorithms
+    packet.pub_key_cred_params_len = 1;
+    packet.pub_key_cred_params[0].alg = COSE_ES256;
+    packet.pub_key_cred_params[0].type = PUBLIC_KEY;
+    //packet.pub_key_cred_params[1].alg = COSE_ES384;
+    //packet.pub_key_cred_params[2].alg = COSE_ES512;
+    //packet.pub_key_cred_params[3].alg = COSE_EDDSA;
+    //packet.pub_key_cred_params[4].alg = COSE_ECDH_ES256;
+    //packet.pub_key_cred_params[5].alg = COSE_RS256;
+    //packet.pub_key_cred_params[6].alg = COSE_RS1;
+   // for(size_t i = 0; i < 1; i++){
+    //    packet.pub_key_cred_params[i].type = PUBLIC_KEY;
+    //}
+
+    
+
     // Check if the user already exists in the database
     if (get_user_id(data->db, data->user_name, &data->user_id, &data->user_id_len) == 0) {
         debug_print_hex(
@@ -689,7 +715,7 @@ int create_reg_request(struct rp_data *data, const u8 **out,
             data->user_id_len);
     } else {
         // Create a user id and save it to the rp_data struct
-        data->user_id_len = 16; // 128 bits
+        data->user_id_len = 64;
         if (create_random_bytes(data->user_id_len, &data->user_id) != 0) {
             debug_printf(DEBUG_LEVEL_ERROR, "Failed to create user id");
             return -1;
@@ -703,62 +729,97 @@ int create_reg_request(struct rp_data *data, const u8 **out,
     // that.
     assert(data->user_name != NULL);
 
-    struct reg_request packet;
-    memset(&packet, 0, sizeof(struct reg_request));
-    packet.challenge = data->challenge;
-    packet.challenge_len = data->challenge_len;
-    packet.rp_id = data->rp_id;
-    packet.rp_name = data->rp_name;
 
-    // User name, user display name and user id are encrypted with the AES-GCM
-    // key.
-    if (aes_gcm_encrypt((u8 *)data->user_name, strlen(data->user_name),
-                        &packet.gcm_user_name, &packet.gcm_user_name_len,
-                        data->gcm_key, data->gcm_key_len) != 0) {
-        debug_printf(DEBUG_LEVEL_ERROR, "Failed to aes-gcm encrypt user name");
-        return -1;
-    }
-    if (aes_gcm_encrypt(
-            (u8 *)data->user_display_name, strlen(data->user_display_name),
-            &packet.gcm_user_display_name, &packet.gcm_user_display_name_len,
-            data->gcm_key, data->gcm_key_len) != 0) {
-        debug_printf(DEBUG_LEVEL_ERROR,
-                     "Failed to aes-gcm encrypt user display name");
-        return -1;
-    }
-    if (aes_gcm_encrypt(data->user_id, data->user_id_len, &packet.gcm_user_id,
-                        &packet.gcm_user_id_len, data->gcm_key,
-                        data->gcm_key_len) != 0) {
-        debug_printf(DEBUG_LEVEL_ERROR, "Failed to aes-gcm encrypt user id");
-        return -1;
-    }
-    // The list of public key credential parameters, in decreasing order of
-    // preference. The first element is the most preferred credential type.
-    packet.pubkey_cred_params = OPENSSL_malloc(6 * sizeof(int));
-    packet.pubkey_cred_params_len = 6;
-    packet.pubkey_cred_params[0] = COSE_ES256;
-    packet.pubkey_cred_params[1] = COSE_ES384;
-    packet.pubkey_cred_params[2] = COSE_EDDSA;
-    packet.pubkey_cred_params[3] = COSE_ECDH_ES256;
-    packet.pubkey_cred_params[4] = COSE_RS256;
-    packet.pubkey_cred_params[5] = COSE_RS1;
+   //Now there exists a CBOR Array, which contains padded user_name, padded user display name, user_id and Optional
+   //parameter: List of public key credentials to limit creation of multiple credentials for the same account on the same
+   //authenticator
 
+    u8 *padded_user_display_name = NULL;
+    const size_t padded_user_display_name_len = 256;
+    padded_user_display_name = OPENSSL_zalloc(padded_user_display_name_len);
+    if(padded_user_display_name == NULL){
+        debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation for padded user display name failed");
+        return -1;
+    }
+    if(bit_padding(padded_user_display_name, data->user_display_name, 
+        strlen(data->user_display_name)) != 0){
+        debug_printf(DEBUG_LEVEL_ERROR, "Failed to pad user display name");
+        return -1;     
+    }
+
+
+    u8 *padded_user_name = NULL;
+    const size_t padded_user_name_len = 256;
+    padded_user_name = OPENSSL_zalloc(padded_user_name_len);
+    if(padded_user_name == NULL){
+        debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation for padded user name failed");
+        return -1;
+    }
+    if(bit_padding(padded_user_name, data->user_name, 
+        strlen(data->user_name)) != 0){
+        debug_printf(DEBUG_LEVEL_ERROR, "Failed to pad user name");
+        return -1;     
+    }
+
+    struct reg_request_encrypted_data encrypted_data = {0};
+    struct public_key_credential_descriptor *exclude_credentials = NULL;
+    size_t exclude_credentials_len = 0; 
+    encrypted_data.padded_user_display_name = padded_user_display_name;
+    encrypted_data.padded_user_display_name_len = padded_user_display_name_len;
+    encrypted_data.padded_user_name = padded_user_name;
+    encrypted_data.padded_user_name_len = padded_user_name_len;
+    encrypted_data.user_id = data->user_id;
+    encrypted_data.user_id_len = data->user_id_len;
+    
+    if(get_excluded_credential_descriptors(data->db, data->user_id, data->user_id_len, &exclude_credentials, &exclude_credentials_len) != 0 ){
+        debug_printf(DEBUG_LEVEL_ERROR, "Database error");
+        return -1;
+    }
+    encrypted_data.exclude_credentials = exclude_credentials;
+    encrypted_data.exclude_credentials_len = exclude_credentials_len; 
+ 
+    u8 *inner_cbor_out = NULL;
+    size_t inner_cbor_out_len = 0;
+
+    if(cbor_build_reg_request_encrypted_data(&encrypted_data, &inner_cbor_out, &inner_cbor_out_len)!=0){
+        debug_printf(DEBUG_LEVEL_ERROR, "Failed building a CBOR array");
+        return -1;
+    }
+
+    u8 *ciphertext_out = NULL;
+    size_t ciphertext_out_len = 0;
+    if(aes_gcm_encrypt(inner_cbor_out, inner_cbor_out_len, &ciphertext_out, &ciphertext_out_len, data->gcm_key, data->gcm_key_len)){
+        debug_printf(DEBUG_LEVEL_ERROR, "Failed encrypting the CBOR array");
+        return -1;
+    }
+    packet.encrypted_data = ciphertext_out;
+    packet.encrypted_data_len = ciphertext_out_len;
+  
     // Optional fields
     if (data->timeout != 0) {
         packet.timeout = data->timeout;
     }
-    if (data->auth_attach != 0 && data->resident_key != 0 && data->user_verification != 0) {
+
+    if (data->auth_attach != 0 ) {
         packet.auth_sel.attachment = data->auth_attach;
+     }
+
+    if(data->resident_key != 0) {
         packet.auth_sel.resident_key = data->resident_key;
+    }
+
+    if(data->user_verification != 0){
         packet.auth_sel.user_verification = data->user_verification;
     }
-    // Get a list of excluded credentials from the database
-    struct credential *creds = NULL;
-    size_t creds_len = 0;
-    if (get_exluded_credentials(data->db, data->user_id, data->user_id_len, &creds, &creds_len) == 0) {
-        // There exist credentials that should be excluded
-        packet.exclude_creds = creds;
-        packet.exclude_creds_len = creds_len;
+    if(data->attestation !=0 ){
+        packet.attestation = data->attestation;
+    }
+
+
+
+    if(data->extensions!=0 && data->extensions_len > 0){
+        packet.extensions = data->extensions;
+        packet.extensions_len = data->extensions_len;
     }
 
     // Encode the packet to CBOR
@@ -767,11 +828,7 @@ int create_reg_request(struct rp_data *data, const u8 **out,
         return -1;
     }
 
-    OPENSSL_free(packet.gcm_user_name);
-    OPENSSL_free(packet.gcm_user_display_name);
-    OPENSSL_free(packet.gcm_user_id);
-    OPENSSL_free(packet.pubkey_cred_params);
-
+    OPENSSL_free(packet.pub_key_cred_params);
     return 0;
 }
 
@@ -808,9 +865,11 @@ int process_indication(const u8 *in, size_t in_len, struct rp_data *data) {
         return -1;
     }
     enum packet_type type = UNDEFINED;
-    struct reg_indication packet;
+    struct reg_indication packet = {0};
     if (cbor_parse(in, in_len, &type, &packet) != 0) {
-        debug_printf(DEBUG_LEVEL_ERROR, "Failed to parse indication");
+        debug_printf(DEBUG_LEVEL_ERROR, "Failed to parse indication");     
+        OPENSSL_free(packet.eph_user_id);
+        OPENSSL_free(packet.encrypted_data);
         return -1;
     }
     // Pre indication has no data. We simply set the new state
@@ -818,12 +877,12 @@ int process_indication(const u8 *in, size_t in_len, struct rp_data *data) {
         data->state = STATE_PRE_INDICATION_RECEIVED;
     } else if (data->state == STATE_PRE_RESPONSE_SENT &&
                type == PKT_REG_INDICATION) {
-        // The reg indication consists of the ephemeral user ID. We must check
-        // if the client provided the correct ephemeral user id.
         if (data->eph_user_id_len != packet.eph_user_id_len ||
             memcmp(data->eph_user_id, packet.eph_user_id,
                    data->eph_user_id_len) != 0) {
             debug_printf(DEBUG_LEVEL_ERROR, "Unknown ephemeral user id");
+            OPENSSL_free(packet.eph_user_id);
+            OPENSSL_free(packet.encrypted_data);
             return -1;
         }
         debug_printf(
@@ -831,61 +890,83 @@ int process_indication(const u8 *in, size_t in_len, struct rp_data *data) {
             "Client provided ephemeral user id matches the stored one");
         assert(data->gcm_key != NULL);
         assert(data->gcm_key_len != 0);
-        // Decrypt the user name
-        u8 *user_name_decrypted;
-        size_t user_name_decrypted_len;
-        if (aes_gcm_decrypt(packet.gcm_user_name, packet.gcm_user_name_len,
-                            &user_name_decrypted, &user_name_decrypted_len, data->gcm_key,
-                            data->gcm_key_len) != 0) {
-            debug_printf(DEBUG_LEVEL_ERROR, "Failed to decrypt user name");
-            return -1;
-                            }
-        char* user_name = OPENSSL_malloc(user_name_decrypted_len + 1);
-        user_name = strcpy(user_name, (char *) user_name_decrypted);
-        user_name[user_name_decrypted_len] = '\0';
-        data->user_name = user_name;
-        debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "decrypted user name: %s", data->user_name);
-        // Decrypt the user display name
-        u8 *user_display_name_decrypted;
-        size_t user_display_name_decrypted_len;
-        if (aes_gcm_decrypt(packet.gcm_user_display_name, packet.gcm_user_display_name_len,
-                            &user_display_name_decrypted, &user_display_name_decrypted_len, data->gcm_key,
-                            data->gcm_key_len) != 0) {
-            debug_printf(DEBUG_LEVEL_ERROR, "Failed to decrypt user display name");
-            return -1;
-                            }
-        char* user_display_name = OPENSSL_malloc(user_display_name_decrypted_len + 1);
-        user_display_name = strcpy(user_display_name, (char *) user_display_name_decrypted);
-        user_display_name[user_display_name_decrypted_len] = '\0';
-        data->user_display_name = user_display_name;
-        debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "decrypted user display name: %s", data->user_display_name);
-        // Decrypt the ticket
-        u8 *ticket_decrypted;
-        size_t ticket_decrypted_len;
-        if (aes_gcm_decrypt(packet.gcm_ticket, packet.gcm_ticket_len,
-                            &ticket_decrypted, &ticket_decrypted_len, data->gcm_key,
-                            data->gcm_key_len) != 0) {
-            debug_printf(DEBUG_LEVEL_ERROR, "Failed to decrypt ticket");
-            return -1;
-                            }
-        debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE, "decrypted ticket: ", ticket_decrypted, ticket_decrypted_len);
-        // Compare the given ticket with the one configured in the server options
-        if (data->ticket_len != ticket_decrypted_len ||
-            memcmp(data->ticket, ticket_decrypted, data->ticket_len) != 0) {
-            debug_printf(DEBUG_LEVEL_ERROR, "Invalid Ticket");
-            return -1;
-            }
-        debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Client provided a valid ticket");
 
-        //cleanup
+
+    u8 *cbor_array_decrypted = NULL;
+    size_t cbor_array_decrypted_len = 0;
+    if (aes_gcm_decrypt(packet.encrypted_data, packet.encrypted_data_len,
+                        &cbor_array_decrypted, &cbor_array_decrypted_len, data->gcm_key,
+                        data->gcm_key_len) != 0) {
+        debug_printf(DEBUG_LEVEL_ERROR, "Failed to decrypt CBOR array");
         OPENSSL_free(packet.eph_user_id);
-        OPENSSL_free(packet.gcm_user_name);
-        OPENSSL_free(user_name_decrypted);
-        OPENSSL_free(packet.gcm_user_display_name);
-        OPENSSL_free(user_display_name_decrypted);
-        OPENSSL_free(packet.gcm_ticket);
-        OPENSSL_free(ticket_decrypted);
-        data->state = STATE_REG_INDICATION_RECEIVED;
+        OPENSSL_free(packet.encrypted_data);
+        return -1;
+    }
+    struct encrypted_data encrypted_data = {0};
+
+    if(cbor_parse_encrypted_data(cbor_array_decrypted, cbor_array_decrypted_len, &encrypted_data)!=0){
+        OPENSSL_free(encrypted_data.padded_user_display_name);
+        OPENSSL_free(encrypted_data.ticket);
+        OPENSSL_free(packet.eph_user_id);
+        OPENSSL_free(packet.encrypted_data);
+        free(cbor_array_decrypted);
+        return -1;
+    }
+    
+   
+    char *unpadded_data = OPENSSL_malloc(257 * sizeof(*unpadded_data));
+    if (unpadded_data == NULL){
+        OPENSSL_free(packet.eph_user_id);
+        OPENSSL_free(encrypted_data.padded_user_display_name);
+        OPENSSL_free(encrypted_data.ticket);
+        OPENSSL_free(packet.encrypted_data);      
+        free(cbor_array_decrypted);
+        return -1;
+    }
+    size_t unpadded_data_len = 0 ;
+
+
+    if(remove_bit_padding(unpadded_data, encrypted_data.padded_user_display_name, &unpadded_data_len)!=0){
+        OPENSSL_free(unpadded_data);
+        OPENSSL_free(packet.eph_user_id);
+        OPENSSL_free(encrypted_data.padded_user_display_name);
+        OPENSSL_free(encrypted_data.ticket);
+        OPENSSL_free(packet.encrypted_data);
+        free(cbor_array_decrypted);
+        return -1;
+    }
+
+
+    if (data->ticket_len != encrypted_data.ticket_len ||
+            CRYPTO_memcmp(data->ticket, encrypted_data.ticket, data->ticket_len) != 0) {
+            debug_printf(DEBUG_LEVEL_ERROR, "Invalid Ticket");
+            OPENSSL_free(unpadded_data);
+            OPENSSL_free(encrypted_data.padded_user_display_name);
+            OPENSSL_free(encrypted_data.ticket);
+            OPENSSL_free(packet.eph_user_id);
+            OPENSSL_free(packet.encrypted_data);
+            free(cbor_array_decrypted);
+            return -1;
+    }
+
+    //According to the I-D, the user name may be the same as the user display name
+    //Thus this implementation uses this design choice
+    data->user_display_name = unpadded_data;
+    char *unpadded_data_copy = OPENSSL_malloc(257 * sizeof(*unpadded_data_copy));
+    memcpy(unpadded_data_copy, unpadded_data, unpadded_data_len + 1);
+    data->user_name = unpadded_data_copy;
+
+   
+
+
+    debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Client provided a valid ticket");
+    OPENSSL_free(packet.eph_user_id);
+    OPENSSL_free(encrypted_data.padded_user_display_name);
+    OPENSSL_free(encrypted_data.ticket);
+    OPENSSL_free(packet.encrypted_data);
+    free(cbor_array_decrypted);
+
+    data->state = STATE_REG_INDICATION_RECEIVED;
     }
     // Again, the auth indication has no data. We simply set the state
     else if (data->state == STATE_INITIAL && type == PKT_AUTH_INDICATION) {
@@ -901,6 +982,8 @@ int process_indication(const u8 *in, size_t in_len, struct rp_data *data) {
         data->state = STATE_AUTH_INDICATION_RECEIVED;
     } else {
         debug_printf(DEBUG_LEVEL_ERROR, "Received unexpected packet");
+        OPENSSL_free(packet.eph_user_id);
+        OPENSSL_free(packet.encrypted_data);
         return -1;
     }
     return 0;

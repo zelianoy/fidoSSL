@@ -23,4 +23,4 @@ int create_auth_response(struct ud_data *data, SSL *ssl, const u8 **out,
                          size_t *out_len);
 
 int create_reg_response(struct ud_data *data, SSL *ssl, const u8 **out,
-                        size_t *out_len);
+                        size_t *out_len);                

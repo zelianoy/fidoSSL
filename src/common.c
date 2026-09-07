@@ -257,7 +257,66 @@ const char *get_action_policy_name(unsigned int type) {
     }
 }
 
-const char *get_cose_algorithm_name(unsigned int alg) {
+
+
+const char *get_attestation_conveyance_pref_name(unsigned int type){
+    switch (type) {
+        case NONE:
+            return "NONE";
+        case INDIRECT:
+            return "INDIRECT";
+        case DIRECT:
+            return "DIRECT";
+        case ENTERPRISE:
+            return "ENTERPRISE";
+        default:
+            return "Unknown attestation conveyance prefernce";       
+    }
+}
+
+
+const char *get_user_verification_requirements_name( unsigned int type){
+  
+    switch (type) {
+        case UV_DISCOURAGED:
+           return "DISCOURAGED";
+
+        case UV_PREFERRED:
+           return "PREFERRED";
+
+        case UV_REQUIRED:
+           return "REQUIRED";
+
+        default: 
+            return " Unknown user verification requirement";
+    }
+}
+
+
+
+
+
+
+
+const char *get_resident_key_requirements_name(unsigned int type){
+
+    switch (type) {
+        case RK_DISCOURAGED:
+            return "DISCOURAGED";
+        
+        case RK_PREFERRED:
+            return "PREFERRED";
+
+        case RK_REQUIRED:
+            return "REQUIRED";
+
+        default:
+            return "Unknown resident key requirement name";    
+    }
+}
+
+
+const char *get_cose_algorithm_name(int alg) {
     switch (alg) {
     case COSE_ES256:
         return "ES256";
@@ -270,8 +329,64 @@ const char *get_cose_algorithm_name(unsigned int alg) {
     case COSE_RS256:
         return "RS256";
     case COSE_RS1:
-        return "RS1";
+        return "RS1";  
+    //Added new COSE algorithm, according to the I-D      
+    case COSE_ES512:
+        return "ES512";
     default:
         return "Unknown Algorithm";
     }
 }
+
+int bit_padding(u8 *padded_data, const char *data, size_t data_len){
+    if(padded_data == NULL||data == NULL){
+        return -1;
+    }
+
+    if(data_len == 0){
+        debug_printf(DEBUG_LEVEL_ERROR, "Empty user display name");
+        return -1;
+    }
+
+    if(data_len > 256){
+        debug_printf(DEBUG_LEVEL_ERROR, "Size of user display name is bigger than 256 bytes");
+        return -1;
+    }
+
+    memcpy(padded_data, data, data_len);
+    if(data_len < 256){
+        memset(padded_data + data_len, 0x80, 1);
+        memset(padded_data + data_len + 1, 0x00, 256 - data_len - 1);
+    }
+  return 0;
+}
+
+
+int remove_bit_padding(char *unpadded_data, const u8 *padded_data, size_t *unpadded_len){
+    if(unpadded_data == NULL || padded_data == NULL ||  unpadded_len == NULL){
+        return -1;
+    }
+    *unpadded_len = 0;
+    for(int i  = 255; i >= 0; i--){
+        if(padded_data[i] == 0x00 && i > 0){
+            continue;
+        }
+        if(padded_data[i] == 0x80 && i > 0){
+            memcpy(unpadded_data, padded_data, i);
+            unpadded_data[i] = '\0';
+            *unpadded_len = (size_t)i;
+            return 0;
+        }
+        if(padded_data[i]!= 0x80 && i == 255){
+            memcpy(unpadded_data, padded_data, i + 1);
+            unpadded_data[i + 1] = '\0';
+            *unpadded_len = (size_t)i+1;
+            return 0;
+        }
+        else{
+            return -1;  
+        }  
+    }
+    return -1;
+}
+

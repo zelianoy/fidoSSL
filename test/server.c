@@ -70,8 +70,8 @@ int main() {
     opts->rp_id = "demo.fido2.tls.edu";
     opts->rp_name = "Demo Fido2 TLS";
     opts->ticket_b64 = "y1v2BsTzi6baajWpU5WSDw6AYorx2MSDO1iVFSQC8VQ=";
-    opts->user_verification = PREFERRED;
-    opts->resident_key = REQUIRED;
+    opts->user_verification = UV_PREFERRED;
+    opts->resident_key = RK_REQUIRED;
     opts->auth_attach = CROSS_PLATFORM;
     opts->transport = USB;
     opts->timeout = 60000; // 1 Minute

@@ -132,7 +132,7 @@ int fidossl_client_parse_cb(
         switch (data->state) {
             case STATE_PRE_INDICATION_SENT:
                 if (process_pre_response(in, inlen, data) != 0) {
-                    debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to process pre registration request");
+                    debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to process pre response");
                     ERR_put_error(ERR_LIB_USER, 0, SSL_AD_ACCESS_DENIED, __FILE__, __LINE__);
                     *al = SSL_AD_ACCESS_DENIED;
                     return -1;
@@ -200,7 +200,7 @@ int fidossl_server_add_cb(
         switch (data->state) {
             case STATE_PRE_INDICATION_RECEIVED:
                 if (create_pre_response(data, out, outlen) != 0) {
-                    debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to create pre registration request");
+                    debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to create pre response");
                     ERR_put_error(ERR_LIB_USER, 0, SSL_AD_ACCESS_DENIED, __FILE__, __LINE__);
                     *al = SSL_AD_ACCESS_DENIED;
                     return -1;

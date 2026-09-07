@@ -18,7 +18,7 @@ typedef enum action_policy {
     DISCOURAGED = 3
 } POLICY;
 
-typedef enum authenticator_attchment {
+typedef enum authenticator_attachment {
     PLATFORM = 1,
     CROSS_PLATFORM = 2
 } AUTH_ATTACH;
@@ -29,6 +29,34 @@ typedef enum transport {
     BLE = 3,
     INTERNAL = 4
 } TRANSPORT;
+
+typedef enum credential_type {
+    PUBLIC_KEY = 1
+} PUBKEY_CRED_TYPE;
+
+//Adding prefixes to the enums, because the enum-constants have the same name
+typedef enum resident_key_requirement{
+    RK_DISCOURAGED = 1,
+    RK_PREFERRED = 2,
+    RK_REQUIRED = 3
+} RESIDENT_KEY_REQ;
+
+typedef enum user_verification_requirement{
+    UV_REQUIRED = 1,
+    UV_PREFERRED = 2,
+    UV_DISCOURAGED = 3
+} USER_VERIF_REQ;
+
+
+typedef enum attestation_conveyance_preference{
+    NONE = 1,
+    INDIRECT = 2,
+    DIRECT = 3,
+    ENTERPRISE = 4
+}ATTESTATION_CONVEYANCE_PREF;
+
+
+
 
 enum fido_state {
     STATE_INITIAL,
@@ -66,7 +94,10 @@ enum packet_type {
     PKT_REG_RESPONSE = 5,
     PKT_AUTH_INDICATION = 6,
     PKT_AUTH_REQUEST = 7,
-    PKT_AUTH_RESPONSE = 8
+    PKT_AUTH_RESPONSE = 8,
+    //added a new packet type for the CBOR array inside of
+    //registration indication
+    PKT_ENCRYPTED_DATA = 10,
 };
 
 struct rp_data {
@@ -75,13 +106,16 @@ struct rp_data {
     size_t challenge_len;
     char *rp_id;
     char *rp_name;
-    POLICY user_verification;
+    USER_VERIF_REQ user_verification;
     // TODO
     POLICY user_presence;
-    POLICY resident_key;
+    RESIDENT_KEY_REQ resident_key;
     AUTH_ATTACH auth_attach;
+    ATTESTATION_CONVEYANCE_PREF attestation;
+    struct extension *extensions;
+    size_t extensions_len;
     TRANSPORT transport;
-    size_t timeout;
+    uint32_t timeout;
     u8 *user_id;
     size_t user_id_len;
     char *user_name;
@@ -101,9 +135,10 @@ struct ud_data {
     size_t challenge_len;
     char *rp_id;
     char *rp_name;
-    POLICY user_verification;
+    USER_VERIF_REQ user_verification;
+    ATTESTATION_CONVEYANCE_PREF attestation;
     POLICY user_presence;
-    POLICY resident_key;
+    RESIDENT_KEY_REQ resident_key;
     // This value is not further processed at the client because only
     // CROSS_PLATFORM is supported.
     AUTH_ATTACH auth_attach;
@@ -120,6 +155,7 @@ struct ud_data {
     size_t user_id_len;
     char *user_name;
     char *user_display_name;
+    size_t user_display_name_len;
     u8 *eph_user_id;
     size_t eph_user_id_len;
     u8 *gcm_key;
@@ -128,16 +164,24 @@ struct ud_data {
     size_t cred_id_len;
     u8 *ticket;
     size_t ticket_len;
+    //TODO: FInd out, whether the old credential structure is needed for authentification
     struct credential *exclude_creds;
     size_t exclude_creds_len;
     char *pin;
     char *origin;
-    int *cred_params;
-    size_t cred_params_len;
+    struct pub_key_cred_param *pub_key_cred_params;
+    size_t pub_key_cred_params_len;
+
+
+    u8 *encrypted_array;
+    struct public_key_credential_descriptor *exclude_credentials;
+    size_t exclude_credentials_len;
+    struct extension *extensions;
+    size_t extensions_len;
 };
 
 typedef struct {
-    union {
+    union { 
         es256_pk_t *es256;
         es384_pk_t *es384;
     };
@@ -178,7 +222,8 @@ struct auth_request {
 
     // Optional fields
     char *rp_id; 
-    enum action_policy user_verification;
+    //TODO
+    USER_VERIF_REQ user_verification;
     int timeout;
 };
 
@@ -210,13 +255,48 @@ struct reg_indication {
     // Required fields
     u8 *eph_user_id;
     size_t eph_user_id_len;
-    u8 * gcm_user_name;
-    size_t gcm_user_name_len;
-    u8 *gcm_user_display_name;
-    size_t gcm_user_display_name_len;
-    u8 *gcm_ticket;
-    size_t gcm_ticket_len;
+    u8 *encrypted_data;
+    size_t encrypted_data_len;
 };
+//Added a new structure encrypted_data, according to I-D Section 12.3
+struct encrypted_data{
+    u8 *padded_user_display_name;
+    size_t padded_user_display_name_len;
+    u8 *ticket;
+    size_t ticket_len;
+};
+
+
+struct public_key_credential_descriptor{
+    enum credential_type type;
+    u8 *id;
+    size_t id_len;
+    enum transport *transports; // e.g. [ USB, NFC ]
+    size_t transports_len;
+};
+
+
+struct reg_request_encrypted_data{
+    u8 *padded_user_name;
+    size_t padded_user_name_len;
+    u8 *padded_user_display_name;
+    size_t padded_user_display_name_len;
+    u8 *user_id;
+    size_t user_id_len;
+    struct public_key_credential_descriptor *exclude_credentials;
+    size_t exclude_credentials_len;
+};
+
+
+
+struct pub_key_cred_param{
+    enum credential_type type;
+    //Because libfido2 library already defines the COSE algorithms as macros
+    int alg;
+};
+
+
+
 
 struct reg_request {
     // Required fields
@@ -224,27 +304,38 @@ struct reg_request {
     size_t challenge_len;
     char *rp_id;
     char *rp_name;
-    u8 *gcm_user_name;
-    size_t gcm_user_name_len;
-    u8 *gcm_user_display_name;
-    size_t gcm_user_display_name_len;
-    u8 *gcm_user_id;
-    size_t gcm_user_id_len;
+    u8 *encrypted_data;
+    size_t encrypted_data_len;
     // Array of enum values (int) defined in libfido2 param.h. Values are:
-    // COSE_UNSPEC COSE_ES256 COSE_EDDSA COSE_ECDH_ES256 COSE_ES384 COSE_RS256 COSE_RS1
-    int *pubkey_cred_params; 
-    size_t pubkey_cred_params_len;
-
+    // COSE_UNSPEC COSE_ES256 COSE_EDDSA COSE_ECDH_ES256 COSE_ES384 COSE_RS256 COSE_RS1 
+   
+    struct pub_key_cred_param *pub_key_cred_params;
+    size_t pub_key_cred_params_len;
+    
+   
     // Optional fields
-    int timeout;
-    struct credential  *exclude_creds;
-    size_t exclude_creds_len;
+    uint32_t timeout;
     struct authenticator_sel {
-        enum authenticator_attchment attachment;
-        enum action_policy resident_key;
-        enum action_policy user_verification;
-    } auth_sel;
+        enum authenticator_attachment attachment;
+        enum resident_key_requirement resident_key;
+        enum user_verification_requirement user_verification;
+    } auth_sel; 
+    enum attestation_conveyance_preference attestation;
+    struct extension *extensions;
+    size_t extensions_len;
+
+
 };
+
+
+//We dont implement extensions now, but they can be added in the future
+struct extension {
+    char *extension_id;
+    size_t extension_id_len;
+    u8 *extension_data;
+    size_t extension_data_len;
+};
+
 
 struct reg_response {
     u8 *authdata;
@@ -260,7 +351,6 @@ void free_auth_request(struct auth_request *auth_request);
 
 void free_auth_response(struct auth_response *auth_response);
 
-//change of the name, according to the I-D
 void free_pre_response(struct pre_response *pre_response);
 
 void free_reg_indication(struct reg_indication *reg_indication);

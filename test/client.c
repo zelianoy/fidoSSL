@@ -65,7 +65,7 @@ int main() {
 
     FIDOSSL_CLIENT_OPTS *opts = malloc(sizeof(FIDOSSL_CLIENT_OPTS));
     // Either FIDOSSL_REGISTER or FIDOSSL_AUTHENTICATE
-    opts->mode = FIDOSSL_AUTHENTICATE;
+    opts->mode = FIDOSSL_REGISTER;
     opts->user_name = "alice";
     opts->user_display_name = "Alice";
     opts->ticket_b64 = "y1v2BsTzi6baajWpU5WSDw6AYorx2MSDO1iVFSQC8VQ=";
