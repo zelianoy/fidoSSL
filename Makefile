@@ -9,7 +9,7 @@ CC = cc
 UNAME_S := $(shell uname -s)
 
 # Using pkg-config to set flags for dependencies
-PKG_CONFIG_DEPS = libssl libfido2 tinycbor jansson sqlite3
+PKG_CONFIG_DEPS = libssl libfido2 tinycbor jansson sqlite3 libpsl
 
 # Define required versions for dependencies
 LIBFIDO2_REQUIRED_VERSION := 1.14.0

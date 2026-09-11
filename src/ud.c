@@ -5,11 +5,13 @@
 #include "fidossl.h"
 #include "serialize.h"
 #include "types.h"
+#include <ctype.h>
 #include <assert.h>
 #include <fido.h>
 #include <jansson.h>
 #include <openssl/sha.h>
 #include <openssl/x509v3.h>
+#include <libpsl.h>
 
 // SSL objects can hold arbitray external data. This index points to the
 // struct which holds the user devise data.
@@ -134,33 +136,105 @@ char *get_origin(SSL *ssl) {
                      origin);
         return origin;
     }
-    // If the client has not set the SNI, we fall back to the hostname set with
+    // If the client has not set the SNI, we can not continue the registration
     // SSL_set1_host().
-    const char *hostname = SSL_get0_peername(ssl);
-    if (hostname) {
-        debug_printf(
-            DEBUG_LEVEL_VERBOSE,
-            "No SNI set by the client. Falling back to the DNS hostname");
-        origin = OPENSSL_zalloc(strlen(hostname) + 1 + 8);
-        memcpy(origin, "https://", 8);
-        memcpy(origin + 8, hostname, strlen(hostname));
-        debug_printf(DEBUG_LEVEL_MORE_VERBOSE,
-                     "Origin derived from DNS hostname: %s", origin);
-        return origin;
-    }
+    
     debug_printf(DEBUG_LEVEL_ERROR,
-                 "Client has not set the SNI nor the DNS hostname");
+                 "Client has not set the SNI hostname");
     return NULL;
 }
 
-int is_equal_or_registrable_domain_suffix(const char *host,
-                                          const char *host_suffix) {
-    // For now, we only check for equality
-    return strcmp(host, host_suffix);
+
+
+//To determine the effective domain, FIDO2 Extension relies on the 
+//subject alternative name (SAN) field, which must be contained in the X.509 certificate, 
+//provided by the server.
+char *get_effective_domain(SSL *ssl){
+    if (!ssl) {
+        return NULL;
+    }
+    char *effective_domain = NULL;
+    const char *sni = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
+    if (sni) {
+        // +1 for null terminator
+        effective_domain = OPENSSL_zalloc(strlen(sni) + 1);
+        memcpy(effective_domain, sni, strlen(sni));
+        debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Effective domain derived from SNI: %s",
+                     effective_domain);
+        return effective_domain;
+    }
+    else{
+        debug_printf(DEBUG_LEVEL_ERROR,
+                 "Client has not set the SNI hostname");
+        return NULL;
+    }
 }
 
-int validate_rp_id(SSL *ssl, const char *origin, const char *rp_id) {
-    if (!ssl || !origin) {
+
+
+
+//TODO
+int is_equal_or_registrable_domain_suffix(const char *host,
+                                          const char *host_suffix) {
+
+    //Reject empty domains
+    if(host == NULL || host_suffix == NULL){
+        return -1;
+    }
+    size_t host_len = strlen(host);
+    size_t host_suffix_len = strlen(host_suffix);
+    if(host_suffix_len > host_len || host_len == 0 || host_suffix_len == 0){
+        return -1;
+    }
+    char *host_cpy = OPENSSL_zalloc(host_len + 1);
+    if(!host_cpy){
+        return -1;
+    }
+    char *host_suffix_cpy = OPENSSL_zalloc(host_suffix_len +1);
+    if(!host_suffix_cpy){
+        OPENSSL_free(host_cpy);
+        return -1;
+    }
+
+
+    for(size_t i = 0; i< host_len; i++){
+        host_cpy[i] = tolower((unsigned char)host[i]);
+    }
+
+    for(size_t i = 0; i< host_suffix_len; i++){
+        host_suffix_cpy[i] = tolower((unsigned char)host_suffix[i]);
+    }
+
+
+    if(strcmp(host_cpy, host_suffix_cpy) == 0){
+        return 0;
+    }
+
+    //return an error if the given rp_id is a public suffix
+    const psl_ctx_t *psl = psl_builtin();  
+    if(!psl) {
+        return -1;
+    }                                     
+    if(psl_is_public_suffix2(psl, host_suffix_cpy, PSL_TYPE_ANY)){
+        OPENSSL_free(host_cpy);
+        OPENSSL_free(host_suffix_cpy);
+        return -1;
+    }      
+
+    if(strcmp(host_cpy + (host_len - host_suffix_len), host_suffix_cpy) == 0 && host_cpy[host_len - host_suffix_len - 1] == '.'){
+        OPENSSL_free(host_cpy);
+        OPENSSL_free(host_suffix_cpy);
+        return 0;
+    }
+    else{
+        OPENSSL_free(host_cpy);
+        OPENSSL_free(host_suffix_cpy);
+        return -1;
+    } 
+}
+//TODO
+int validate_rp_id(SSL *ssl, const char *effective_domain, const char *rp_id) {
+    if (!ssl || !effective_domain) {
         return -1;
     }
 
@@ -170,67 +244,14 @@ int validate_rp_id(SSL *ssl, const char *origin, const char *rp_id) {
     // equal to the RP’s origin's effective domain.
     // See: https://www.w3.org/TR/webauthn-2/#relying-party-identifier
 
-    // If the RP explilcitly provided a RPID and its equal to the origin, we
-    // accept it. Again, no need to validate against the server certificate as
-    // TLS is doing that.
-    if (strcmp(rp_id, origin) == 0) {
+    if(is_equal_or_registrable_domain_suffix(effective_domain, rp_id) == 0){
         return 0;
     }
-
-    // If the RP explilcitly provided a RPID and it does not match the origin,
-    // we must check if it matches any registrable domain suffix of the DNS
-    // names in the server certificate's Subject Alternative Name (SAN) field.
-
-    // Get the X509 server certificate from the SSL object
-    X509 *cert = SSL_get_peer_certificate(ssl);
-    if (!cert) {
-        debug_printf(DEBUG_LEVEL_ERROR, "No server certificate available");
+    else{ 
+        debug_printf(DEBUG_LEVEL_ERROR, "The server provided RPID does not match "
+                                        "any registrable domain suffix");
         return -1;
-    }
-    // Get the SAN field from the certificate.
-    STACK_OF(GENERAL_NAME) *san_names = NULL;
-    san_names = X509_get_ext_d2i(cert, NID_subject_alt_name, NULL, NULL);
-    if (!san_names) {
-        // When no SAN field is found, we could fall back to the Common Name
-        // (CN) field, but it is deprecated so we don't.
-        debug_printf(DEBUG_LEVEL_ERROR, "No SAN field in the certificate");
-        X509_free(cert);
-        return -1;
-    }
-    // Iterate over the DNS names in the SAN field and compare them to the
-    // RPID
-    int san_names_len = sk_GENERAL_NAME_num(san_names);
-    for (int i = 0; i < san_names_len; ++i) {
-        const GENERAL_NAME *current_name = sk_GENERAL_NAME_value(san_names, i);
-        // Only look at DNS names. We ignore IP addresses and URIs.
-        if (current_name->type != GEN_DNS)
-            continue;
-
-        // Convert the ASN1 string to a byte array
-        u8 *dns_name_bytes = NULL;
-        size_t dns_name_len =
-            ASN1_STRING_to_UTF8(&dns_name_bytes, current_name->d.dNSName);
-
-        // Create a c-string from the byte array without repeated heap
-        // allocation
-        char dns_name[dns_name_len + 1];
-        memcpy(dns_name, dns_name_bytes, dns_name_len);
-        dns_name[dns_name_len] = '\0';
-        OPENSSL_free(dns_name_bytes);
-
-        if (is_equal_or_registrable_domain_suffix(dns_name, rp_id) == 0) {
-            // We accept the RPID
-            X509_free(cert);
-            sk_GENERAL_NAME_pop_free(san_names, GENERAL_NAME_free);
-            return 0;
-        }
-    }
-    // The RPID does not match the server certificate's DNS names
-    debug_printf(DEBUG_LEVEL_ERROR, "The server provided RPID does not match "
-                                    "the server certificate's DNS names");
-    X509_free(cert);
-    sk_GENERAL_NAME_pop_free(san_names, GENERAL_NAME_free);
-    return -1;
+    }  
 }
 
 char *generate_clientdata(struct ud_data *data, const char *type) {
@@ -737,19 +758,18 @@ int create_reg_response(struct ud_data *data, SSL *ssl, const u8 **out,
     // Update ud_data with the origin
     data->origin = get_origin(ssl);
 
-    // If the RP did not explicitly override the RPID, we default to the origin.
-    // It is not necessary to validate the RPID against the server certificate
-    // since we already enforce the use of SNI or hostname validation. The TLS
-    // handshake would fail if the server certificate does not match.
+    //update ud_data with effective domain
+    data->effective_domain = get_effective_domain(ssl);
+    // If the RP did not explicitly override the RPID, we default to the effective domain
     if (!data->rp_id) {
-        data->rp_id = data->origin;
+        data->rp_id = data->effective_domain;
     } else {
         // If the RP explilcitly provided a RPID, we must validate it against
-        // the origin.
-        if (validate_rp_id(ssl, data->origin, data->rp_id) != 0) {
+        // either registrable domain suffix or origins effective domain
+        if (validate_rp_id(ssl, data->effective_domain, data->rp_id) != 0) {
             debug_printf(DEBUG_LEVEL_ERROR,
                          "Server provided RPID is no registrable domain suffix "
-                         "of the server certificate SNI or hostname");
+                         "of the server certificate SNI or effective domain");
             return -1;
         }
     }
@@ -791,19 +811,21 @@ int create_auth_response(struct ud_data *data, SSL *ssl, const u8 **out,
     // Update ud_data with the origin
     data->origin = get_origin(ssl);
 
+
+    data->effective_domain = get_effective_domain(ssl);
     // If the RP did not explicitly override the RPID, we default to the origin.
     // It is not necessary to validate the RPID against the server certificate
     // since we already enforce the use of SNI or hostname validation. The TLS
     // handshake would fail if the server certificate does not match.
     if (!data->rp_id) {
-        data->rp_id = data->origin;
+        data->rp_id = data->effective_domain;
     } else {
         // If the RP explilcitly provided a RPID, we must validate it against
         // the origin.
-        if (validate_rp_id(ssl, data->origin, data->rp_id) != 0) {
+        if (validate_rp_id(ssl, data->effective_domain, data->rp_id) != 0) {
             debug_printf(DEBUG_LEVEL_ERROR,
                          "Server provided RPID is no registrable domain suffix "
-                         "of the server certificate SNI or hostname");
+                         "of the server certificate SNI or effective domain");
             return -1;
         }
     }

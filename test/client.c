@@ -6,7 +6,7 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <fidossl.h>
-
+#include <openssl/x509v3.h>
 #define SERVER_IP "127.0.0.1"
 #define SERVER_PORT 12345
 
@@ -115,15 +115,18 @@ int main() {
     // Create SSL connection
     ssl = SSL_new(ctx);
     SSL_set_fd(ssl, sockfd);
-
+    //Set the flag to enforce the SAN presence and to prevent fallback to the Common Name
+    SSL_set_hostflags(ssl, X509_CHECK_FLAG_NEVER_CHECK_SUBJECT);
     // Set the SNI hostname
     if (!SSL_set_tlsext_host_name(ssl, "demo.fido2.tls.edu")) {
         printf("Failed to set the SNI hostname\n");
+        return -1;
     }
 
     // Additionally set hostname validation
     if (!SSL_set1_host(ssl, "demo.fido2.tls.edu")) {
         printf("Failed to set the certificate verification hostname");
+        return -1;
     }
 
     // Do the TLS handshake
@@ -145,15 +148,21 @@ int main() {
         SSL_free(ssl);
         ssl = SSL_new(ctx);
         SSL_set_fd(ssl, sockfd);
+        SSL_set_hostflags(ssl, X509_CHECK_FLAG_NEVER_CHECK_SUBJECT);
+
 
         // Set the SNI hostname
         if (!SSL_set_tlsext_host_name(ssl, "demo.fido2.tls.edu")) {
             printf("Failed to set the SNI hostname\n");
+            //When the SNI hostname can not be set, we should close the connection
+            //same for the hostname validation
+            return -1;
         }
 
         // Additionally set hostname validation
         if (!SSL_set1_host(ssl, "demo.fido2.tls.edu")) {
             printf("Failed to set the certificate verification hostname");
+            return -1;
         }
 
         // Connect to server again

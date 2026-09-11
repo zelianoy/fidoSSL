@@ -420,11 +420,6 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
                             return -1;
                         }
                         p->auth_sel.resident_key = resident_key;
-
-
-                        //TODO: Ausgabe von resident key reqirements
-
-
                         debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    resident key: %s",
                                 get_resident_key_requirements_name(resident_key));   
                         break;
@@ -445,7 +440,6 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
                         break;
         
 
-
                         default:
                         debug_printf(DEBUG_LEVEL_ERROR, "Unknown optional parameter");
                         return -1;
@@ -460,6 +454,7 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
                     goto err;
                 }
                 break;  
+
 
                 case ATTESTATION:
                 if(!cbor_value_is_unsigned_integer(&map_it)){
@@ -500,8 +495,6 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
                         p->extensions[i].extension_id_len = len;
                         p->extensions[i].extension_id = OPENSSL_zalloc(len + 1);
                         cbor_value_copy_text_string(&sub_map_it, p->extensions[i].extension_id, &len, &sub_map_it);
-                       // debug_print(DEBUG_LEVEL_VERBOSE, "   extension id:  ",  p->extensions[i].extension_id, p->extensions[i].extension_id_len);
-
                         if(!cbor_value_is_byte_string(&sub_map_it)) {
                             debug_printf(DEBUG_LEVEL_ERROR, "extension data is not a byte string");
                             return -1;
@@ -513,8 +506,7 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
                         }
                         p->extensions[i].extension_data_len = len;
                         p->extensions[i].extension_data = OPENSSL_zalloc(len);
-                        cbor_value_copy_byte_string(&sub_map_it, p->extensions[i].extension_data, &len, &sub_map_it);
-                        //debug_print_hex(DEBUG_LEVEL_VERBOSE, " extension data:  %zu ", p->extensions[i].extension_data,  p->extensions[i].extension_data_len);
+                        cbor_value_copy_byte_string(&sub_map_it, p->extensions[i].extension_data, &len, &sub_map_it);         //debug_print_hex(DEBUG_LEVEL_VERBOSE, " extension data:  %zu ", p->extensions[i].extension_data,  p->extensions[i].extension_data_len);
                     }
                     if(!cbor_value_at_end(&sub_map_it)){
                         return -1;

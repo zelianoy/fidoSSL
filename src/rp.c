@@ -507,6 +507,9 @@ int verify_clientdata(struct rp_data *data, const char *clientdata_json,
                      "    Type matches \"webauthn.get\"");
     }
 
+
+
+    json_t *json_effective_domain = json_object_get(root, "effective_domain");
     // Extract the origin string
     json_t *json_origin = json_object_get(root, "origin");
     if (!json_origin || !json_is_string(json_origin)) {
@@ -516,8 +519,8 @@ int verify_clientdata(struct rp_data *data, const char *clientdata_json,
         return -1;
     }
     const char *origin = json_string_value(json_origin);
-    // prepend https:// to the rp id
-    char *rp_id = OPENSSL_malloc(strlen(data->rp_id) + 1 + 8);
+    //rp id now doesnt contain a scheme
+    char *rp_id = OPENSSL_malloc(strlen(data->rp_id) + 1);
     if (rp_id == NULL) {
         debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation failed");
         json_decref(root);

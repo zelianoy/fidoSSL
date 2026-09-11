@@ -169,6 +169,7 @@ struct ud_data {
     size_t exclude_creds_len;
     char *pin;
     char *origin;
+    char *effective_domain;
     struct pub_key_cred_param *pub_key_cred_params;
     size_t pub_key_cred_params_len;
 
