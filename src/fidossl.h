@@ -49,6 +49,7 @@ typedef struct fidossl_server_opts {
     USER_VERIF_REQ user_verification;
     RESIDENT_KEY_REQ resident_key;
     AUTH_ATTACH auth_attach;
+    ATTESTATION_CONVEYANCE_PREF attestation;
     TRANSPORT transport;
     size_t timeout;
     int debug_level;

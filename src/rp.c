@@ -103,6 +103,9 @@ struct rp_data *init_rp(SSL *ssl, void *server_opts) {
         debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    Timeout: %d ms",
                      data->timeout);
     }
+    if(opts->attestation != 0){
+        data->attestation = opts->attestation;
+    }
     // Init the state
     data->state = STATE_INITIAL;
 
@@ -461,16 +464,16 @@ es256_pk_t *get_public_key(const u8 *cose_key, size_t cose_key_len) {
 
     return pk;
 }
-
+//TODO
 int verify_clientdata(struct rp_data *data, const char *clientdata_json,
-                      enum fido_mode mode) {
+    const size_t clientdata_json_len,  enum fido_mode mode) {
     // We could drop the JSON dependency here and parse the client data manually.
     assert(data->challenge != NULL && data->challenge_len != 0 &&
            data->rp_id != NULL);
 
     // Parse the client data JSON string
     json_error_t error;
-    json_t *root = json_loads(clientdata_json, 0, &error);
+    json_t *root = json_loadb(clientdata_json, clientdata_json_len, 0, &error);
     if (!root) {
         debug_printf(DEBUG_LEVEL_ERROR, "Failed to parse client data: %s",
                      error.text);
@@ -505,11 +508,9 @@ int verify_clientdata(struct rp_data *data, const char *clientdata_json,
         }
         debug_printf(DEBUG_LEVEL_MORE_VERBOSE,
                      "    Type matches \"webauthn.get\"");
-    }
+    } 
 
 
-
-    json_t *json_effective_domain = json_object_get(root, "effective_domain");
     // Extract the origin string
     json_t *json_origin = json_object_get(root, "origin");
     if (!json_origin || !json_is_string(json_origin)) {
@@ -519,24 +520,35 @@ int verify_clientdata(struct rp_data *data, const char *clientdata_json,
         return -1;
     }
     const char *origin = json_string_value(json_origin);
-    //rp id now doesnt contain a scheme
-    char *rp_id = OPENSSL_malloc(strlen(data->rp_id) + 1);
-    if (rp_id == NULL) {
+    // prepend https:// to the expected origin
+    char *expected_origin = OPENSSL_malloc(strlen(data->rp_id) + 1 + 8);
+    if (expected_origin == NULL) {
         debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation failed");
         json_decref(root);
         return -1;
     }
-    strcpy(rp_id, "https://");
-    strcat(rp_id, data->rp_id);
-    if (strcmp(origin, rp_id) != 0) {
-        debug_printf(DEBUG_LEVEL_ERROR, "    Origin is not equal to the rp id");
+    strcpy(expected_origin, "https://");
+    strcat(expected_origin, data->rp_id);
+    if (strcmp(origin, expected_origin) != 0) {
+        debug_printf(DEBUG_LEVEL_ERROR, "    Origin does not match the expected one");
         json_decref(root);
-        OPENSSL_free(rp_id);
+        OPENSSL_free(expected_origin);
         return -1;
     } else {
         debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    Origin is valid: %s", origin);
     }
-    OPENSSL_free(rp_id);
+    OPENSSL_free(expected_origin);
+ 
+    //Extract the crossOrigin boolean
+    json_t *json_cross_origin = json_object_get(root, "crossOrigin");
+    if(!json_is_false(json_cross_origin)){
+        debug_printf(DEBUG_LEVEL_ERROR,
+                     "    crossOrigin is missing or not a boolean false in client data");
+        json_decref(root);
+        return -1;
+   }
+
+
 
     // Extract the challenge string
     json_t *json_challenge = json_object_get(root, "challenge");
@@ -579,6 +591,7 @@ int verify_clientdata(struct rp_data *data, const char *clientdata_json,
     return 0;
 }
 
+//TODO
 int verify_authdata(struct rp_data *data, struct authdata *authdata,
                     enum fido_mode mode, int sign_count) {
     if (data == NULL || authdata == NULL) {
@@ -991,7 +1004,7 @@ int process_indication(const u8 *in, size_t in_len, struct rp_data *data) {
     }
     return 0;
 }
-
+//TODO: the attStmt and fmt
 int process_reg_response(const u8 *in, size_t in_len, struct rp_data *data) {
     if (in == NULL || in_len == 0 || data == NULL) {
         return -1;
@@ -1005,46 +1018,141 @@ int process_reg_response(const u8 *in, size_t in_len, struct rp_data *data) {
         return -1;
     }
     // Verify the client data
-    if (verify_clientdata(data, packet.clientdata_json, REGISTER) != 0) {
+    if (verify_clientdata(data, packet.clientdata_json, packet.clientdata_json_len, REGISTER) != 0) {
         debug_printf(DEBUG_LEVEL_ERROR, "Failed to verify client data");
         return -1;
     }
-
-    // Parse authdata
-    uint8_t *authDataBytes = NULL;
-    size_t authDataBytesLen = 0;
-    if (extract_authdata_from_attobj(packet.authdata, packet.authdata_len, &authDataBytes, &authDataBytesLen) != 0) {
-        debug_printf(DEBUG_LEVEL_ERROR, "Failed to extract authdata from attestation object");
+    if(data->attestation != DIRECT){
         return -1;
     }
-    struct authdata *ad = parse_authdata(authDataBytes, authDataBytesLen);
+
+    //TODO failure checks and memory allocation
+    fido_cred_t *server_side_credential = fido_cred_new();
+    if(server_side_credential == NULL){
+        return -1;
+    }
+
+
+
+    if(fido_cred_set_type(server_side_credential, COSE_ES256) != FIDO_OK){
+        return -1;
+    }
+    if(fido_cred_set_rp(server_side_credential, data->rp_id, data->rp_name) != FIDO_OK){
+        return -1;
+    }
+    if(fido_cred_set_clientdata(server_side_credential, (const unsigned char *)packet.clientdata_json, packet.clientdata_json_len)!= FIDO_OK){
+        return -1;
+    }
+    
+
+
+    fido_opt_t uv_preference = FIDO_OPT_OMIT;
+    if(data->user_verification == UV_REQUIRED){
+        uv_preference = FIDO_OPT_TRUE;
+    }
+
+    if(fido_cred_set_uv(server_side_credential, uv_preference)!=FIDO_OK){
+        return -1;
+    }
+
+
+    fido_opt_t rk_preference = FIDO_OPT_OMIT;
+    if(data->resident_key == RK_REQUIRED){
+        rk_preference = FIDO_OPT_TRUE;
+    }
+
+
+    
+
+    if(fido_cred_set_rk(server_side_credential, rk_preference)!= FIDO_OK){
+        return -1;
+    }
+
+
+    if(fido_cred_set_attobj(server_side_credential, packet.attestation_object, packet.attestation_object_len)!= FIDO_OK){
+        return -1;
+    }
+
+    const char *fmt = fido_cred_fmt(server_side_credential);
+    if(fmt == NULL){
+        return -1;
+    }
+    if(strcmp(fmt, "packed")!= 0){
+        return -1;
+    }
+    if(fido_cred_x5c_list_count(server_side_credential) == 0){
+        return -1;
+    }
+
+    const unsigned char *leaf_cert = fido_cred_x5c_list_ptr(server_side_credential, 0);
+
+    size_t leaf_cert_len = fido_cred_x5c_list_len(server_side_credential, 0);
+    
+
+    //TODO: establish the trust in x5c certificate chain, for now we skip this step
+    //TODO: packed-attestation certificate-profile validation
+
+    if(leaf_cert == NULL || leaf_cert_len == 0){
+        return -1;
+    }
+
+    if(fido_cred_verify(server_side_credential) != FIDO_OK){
+        return -1;
+    }
+  
+
+
+    // Now we prepare the data that is going to be stored in the database
+    struct credential *cred = OPENSSL_malloc(sizeof(struct credential));
+    if (cred == NULL) {
+        debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation failed");
+        return -1;
+    }
+    memset(cred, 0, sizeof(struct credential));
+   
+
+    const unsigned char *cred_id_ptr = fido_cred_id_ptr(server_side_credential);
+    if(cred_id_ptr == NULL){
+        return -1;
+    }
+
+    size_t cred_id_len = fido_cred_id_len(server_side_credential);
+    if(cred_id_len > 1023 || cred_id_len == 0){
+        return -1;
+    }
+
+    cred->id = OPENSSL_zalloc(cred_id_len);
+    if(cred->id == NULL){
+        return -1;
+    }
+
+
+    memcpy(cred->id, cred_id_ptr, cred_id_len);
+    cred->id_len = cred_id_len;
+    //Rejecting the registration ceremony because credential id is already registred or database failed
+    if(cred_id_exists(data->db, cred->id, cred->id_len)!=0){
+        return -1;
+    }
+
+    const unsigned char *cred_authdata = fido_cred_authdata_raw_ptr(server_side_credential);
+    size_t cred_authdata_len = fido_cred_authdata_raw_len(server_side_credential);
+    
+    struct authdata *ad = parse_authdata(cred_authdata, cred_authdata_len);
     if (ad == NULL) {
         debug_printf(DEBUG_LEVEL_ERROR, "Failed to parse authdata");
         return -1;
     }
-
-    // Verify the authdata
-    if (verify_authdata(data, ad, REGISTER, 0) != 0) {
-        debug_printf(DEBUG_LEVEL_ERROR, "Failed to verify authdata");
+    if(memcmp(ad->cred_id, cred->id, cred_id_len)!=0){
         return -1;
     }
 
-    // Now we prepare the data that is going to be stored in the database
-    struct credential *cred = OPENSSL_malloc(sizeof(struct credential));
-    memset(cred, 0, sizeof(struct credential));
-    if (cred == NULL) {
-        debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation failed");
-        free_authdata(ad);
-        return -1;
-    }
 
-    cred->id = ad->cred_id;
-    ad->cred_id = NULL;
-    cred->id_len = ad->cred_id_len;
     cred->pubkey_cose = ad->pubkey;
     ad->pubkey = NULL;
     cred->pubkey_cose_len = ad->pubkey_len;
-    cred->sign_count = ad->sign_count;
+  
+    
+    cred->sign_count = fido_cred_sigcount(server_side_credential);
     cred->type = "public-key";
 
     // Data going to be stored in the database:
@@ -1059,16 +1167,18 @@ int process_reg_response(const u8 *in, size_t in_len, struct rp_data *data) {
     if (add_creds(data->db, data->user_id, data->user_id_len, data->user_name,
                   data->rp_id, cred) != 0) {
         debug_printf(DEBUG_LEVEL_ERROR, "Failed to add credential to database");
-        free_authdata(ad);
+        //free_authdata(ad);
         free_credential(cred);
         sqlite3_close(data->db);
         return -1;
     }
-
+    OPENSSL_free(data->challenge);
+    data->challenge = NULL;
+    data->challenge_len = 0;
     free_authdata(ad);
     cred->type = NULL; // The type is not dynamically allocated
     free_credential(cred);
-    OPENSSL_free(packet.authdata);
+    OPENSSL_free(packet.attestation_object);
     OPENSSL_free(packet.clientdata_json);
     return 0;
 }
@@ -1098,7 +1208,7 @@ int process_auth_response(const u8 *in, size_t in_len, struct rp_data *data) {
     }
 
     // Verify the client data
-    if (verify_clientdata(data, packet.clientdata_json, AUTHENTICATE) != 0) {
+    if (verify_clientdata(data, packet.clientdata_json, packet.clientdata_json_len, AUTHENTICATE) != 0) {
         debug_printf(DEBUG_LEVEL_ERROR, "Failed to verify client data");
         return -1;
     }
@@ -1130,7 +1240,7 @@ int process_auth_response(const u8 *in, size_t in_len, struct rp_data *data) {
     // Set the client data hash
     u8 hash[SHA256_DIGEST_LENGTH];
     SHA256((unsigned char *)packet.clientdata_json,
-           strlen(packet.clientdata_json), hash);
+           packet.clientdata_json_len, hash);
     if (fido_assert_set_clientdata_hash(assert, hash, SHA256_DIGEST_LENGTH) !=
         FIDO_OK) {
         debug_printf(DEBUG_LEVEL_ERROR,

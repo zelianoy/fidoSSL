@@ -18,3 +18,5 @@ int get_excluded_credential_descriptors(sqlite3 *db, const u8 *user_id, size_t u
 
 int add_creds(sqlite3 *db, const u8 *user_id, size_t user_id_len,
               const char *user_name, const char *rpid, struct credential *cred);
+              
+int cred_id_exists(sqlite3 *db, const u8 *cred_id, size_t cred_id_len);

@@ -40,6 +40,8 @@ int main() {
     SSL *ssl;
     int sockfd;
     struct sockaddr_in server_addr;
+    fido_init(0);
+
 
     // Initialize OpenSSL
     SSL_library_init();
@@ -68,8 +70,8 @@ int main() {
     opts->mode = FIDOSSL_REGISTER;
     opts->user_name = "alice";
     opts->user_display_name = "Alice";
-    opts->ticket_b64 = "y1v2BsTzi6baajWpU5WSDw6AYorx2MSDO1iVFSQC8VQ=";
-    opts->pin = "1234";
+    opts->ticket_b64 = "XSQrGrqft2dkPdWBKqkAT86wmQCGE2xZh8ODh7FTADxv17q7a9sWdCSsWysPTElhSGvtZEc6Ejp257ju6fcCT4aoSXSlgIlqRNId0htgesEHmCKMRwoytZugYjr2gbCDErHsCHVhZAaFfHb6SueZ+tGINFrGMyGk2HYnM8Jvnofp0AJYkBu9t76h4cMfMKBZdtAvIOlvoo4i9UaZOVyjff2jSd/sTILAHzUqtj85Ipp8yecanqUPVkwBAXGlvjBYmnPvnOKcxGLXmetOkOYG8Q6s4e8LeHdGsF8sFypv+lL2g+L+/YBLaKlsys2aABbaXP6evVp3/7ACEkdTHpreuA==";
+    opts->pin = "9345";
     opts->debug_level = DEBUG_LEVEL_MORE_VERBOSE;
 
     // Add extension

@@ -146,9 +146,14 @@ struct ud_data {
     // USB is supported.
     TRANSPORT transport;
     size_t timeout;
+
+    u8 *attestation_object;
+    size_t attestation_object_len;
+    char *clientdata_json;
+    size_t clientdata_json_len;
     u8 *authdata;
     size_t authdata_len;
-    char *clientdata_json;
+
     u8 *signature;
     size_t signature_len;
     u8 *user_id;
@@ -233,6 +238,7 @@ struct auth_response {
     u8 *authdata;
     size_t authdata_len;
     char *clientdata_json;
+    size_t clientdata_json_len;
     u8 *signature;
     size_t signature_len;
 
@@ -339,9 +345,10 @@ struct extension {
 
 
 struct reg_response {
-    u8 *authdata;
-    size_t authdata_len;
+    u8 *attestation_object;
+    size_t attestation_object_len;
     char *clientdata_json;
+    size_t clientdata_json_len;
 };
 
 void free_rp_data(struct rp_data *rp_data);

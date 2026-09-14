@@ -72,6 +72,8 @@ int aes_gcm_encrypt(const u8 *plain, size_t plain_len, u8 **cypher, size_t *cyph
     // Hardcoded IV. We must not generate a new one since the GCM key is only
     // used once
     // Needs to be 12 Bytes long
+    //TODO: since we now have encrypted data arrays in more than one message, IV can not be reused and should be generated for every new encryption
+    //we should transmit it with the tag
     u8 *iv = (u8 *)"012345678901";
     u8 tag[16]; // GCM Tag
 
@@ -389,4 +391,5 @@ int remove_bit_padding(char *unpadded_data, const u8 *padded_data, size_t *unpad
     }
     return -1;
 }
+
 

@@ -151,8 +151,6 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
         }
         p->gcm_key = OPENSSL_zalloc(p->gcm_key_len);
         cbor_value_copy_byte_string(&it, p->gcm_key, &p->gcm_key_len, &it);
-        debug_print_hex(DEBUG_LEVEL_VERBOSE, "    gcm key: ", p->gcm_key,
-                        p->gcm_key_len);
         break;
     }
     case PKT_REG_INDICATION: {
@@ -530,7 +528,7 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
         break;
     }
     case PKT_REG_RESPONSE: {
-        if (array_len < 2) {
+        if (array_len != 3) {
             debug_printf(DEBUG_LEVEL_ERROR, "Malformed reg response");
             goto err;
         }
@@ -541,21 +539,29 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
         }
         cbor_value_advance(&it);
         if (!cbor_value_is_byte_string(&it)) {
-            debug_printf(DEBUG_LEVEL_ERROR, "Authdata is not a byte string");
+            debug_printf(DEBUG_LEVEL_ERROR, "Attestation object is not a byte string");
             goto err;
         }
-        cbor_value_calculate_string_length(&it, &p->authdata_len);
-        p->authdata = OPENSSL_zalloc(p->authdata_len);
-        cbor_value_copy_byte_string(&it, p->authdata, &p->authdata_len, &it);
-        debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE, "    authdata: ", p->authdata,
-                        p->authdata_len);
+        cbor_value_calculate_string_length(&it, &p->attestation_object_len);
+        if(p->attestation_object_len < 1 || p->attestation_object_len > 8192){
+            debug_printf(DEBUG_LEVEL_ERROR, "Size of attestation object is not within allowed range");
+            return -1;
+        }
+        p->attestation_object = OPENSSL_zalloc(p->attestation_object_len);
+        cbor_value_copy_byte_string(&it, p->attestation_object, &p->attestation_object_len, &it);
+        debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE, "    authdata: ", p->attestation_object,
+                        p->attestation_object_len);
         if (!cbor_value_is_text_string(&it)) {
             debug_printf(DEBUG_LEVEL_ERROR, "Clientdata is not a text string");
             goto err;
         }
-        cbor_value_calculate_string_length(&it, &len);
-        p->clientdata_json = OPENSSL_zalloc(len + 1); // +1 for null terminator
-        cbor_value_copy_text_string(&it, p->clientdata_json, &len, &it);
+        cbor_value_calculate_string_length(&it, &p->clientdata_json_len);
+        if(p->clientdata_json_len < 1 || p->clientdata_json_len > 2048){
+            debug_printf(DEBUG_LEVEL_ERROR, "Size of clientdata json is not within allowed range");
+            return -1;
+        }
+        p->clientdata_json = OPENSSL_zalloc(p->clientdata_json_len + 1); // +1 for null terminator
+        cbor_value_copy_text_string(&it, p->clientdata_json, &p->clientdata_json_len, &it);
         debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    clientdata: %s",
                      p->clientdata_json);
         break;
@@ -663,8 +669,8 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
             debug_printf(DEBUG_LEVEL_ERROR, "Clientdata is not a text string");
             goto err;
         }
-        cbor_value_calculate_string_length(&it, &len);
-        p->clientdata_json = OPENSSL_zalloc(len + 1); // +1 for null terminator
+        cbor_value_calculate_string_length(&it, &p->clientdata_json_len);
+        p->clientdata_json = OPENSSL_zalloc(p->clientdata_json_len + 1); // +1 for null terminator
         cbor_value_copy_text_string(&it, p->clientdata_json, &len, &it);
         debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    clientdata: %s",
                      p->clientdata_json);
@@ -1020,8 +1026,7 @@ int cbor_build(const void *input, enum packet_type type, const u8 **out_buf,
                         "    eph user id: ", in->eph_user_id,
                         in->eph_user_id_len);
         cbor_encode_byte_string(&array, in->gcm_key, in->gcm_key_len);
-        debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE, "    gcm key: ", in->gcm_key,
-                        in->gcm_key_len);
+
         break;
     }
     case PKT_REG_INDICATION: {
@@ -1191,16 +1196,16 @@ int cbor_build(const void *input, enum packet_type type, const u8 **out_buf,
 
     case PKT_REG_RESPONSE: {
         struct reg_response *in = (struct reg_response *)input;
-        assert(in->authdata != NULL && in->authdata_len != 0 &&
+        assert(in->attestation_object != NULL && in->attestation_object_len != 0 &&
                in->clientdata_json != NULL);
         // Required fields are packet type, att_obj and clientdata_json
         cbor_encoder_create_array(&encoder, &array, 3);
         cbor_encode_int(&array, PKT_REG_RESPONSE);
-        cbor_encode_byte_string(&array, in->authdata, in->authdata_len);
+        cbor_encode_byte_string(&array, in->attestation_object, in->attestation_object_len);
         debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE,
-                        "    authenticator data: ", in->authdata,
-                        in->authdata_len);
-        cbor_encode_text_stringz(&array, in->clientdata_json);
+                        "    attestation object: ", in->attestation_object,
+                        in->attestation_object_len);
+        cbor_encode_text_string(&array, in->clientdata_json, in->clientdata_json_len);                
         debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    clientdata: %s",
                      in->clientdata_json);
         break;
@@ -1271,7 +1276,7 @@ int cbor_build(const void *input, enum packet_type type, const u8 **out_buf,
         // The last field of the array is a map if there are optional parameters
         cbor_encoder_create_array(&encoder, &array, 5);
         cbor_encode_int(&array, PKT_AUTH_RESPONSE);
-        cbor_encode_text_stringz(&array, in->clientdata_json);
+        cbor_encode_text_string(&array, in->clientdata_json, in->clientdata_json_len);
         debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    clientdata: %s",
                      in->clientdata_json);
         cbor_encode_byte_string(&array, in->authdata, in->authdata_len);

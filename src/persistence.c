@@ -304,3 +304,30 @@ int add_creds(sqlite3 *db, const u8 *user_id, size_t user_id_len,
     sqlite3_finalize(stmt);
     return rc == SQLITE_DONE ? 0 : -1;
 }
+
+
+int cred_id_exists(sqlite3 *db, const u8 *cred_id, size_t cred_id_len){
+    sqlite3_stmt *stmt;
+    int rc;
+
+    // Check if credential ID exists
+    const char *sql_check_credential_id = "SELECT cred_id FROM credentials WHERE cred_id = ?";
+    rc = sqlite3_prepare_v2(db, sql_check_credential_id, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "SQL error: %s\n", sqlite3_errmsg(db));
+        return -1;
+    }
+    sqlite3_bind_blob64(stmt, 1, cred_id, cred_id_len, SQLITE_STATIC);
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    if (rc==SQLITE_ROW){
+        return 1;
+    }
+    if(rc == SQLITE_DONE){
+        return 0;
+    }
+    else{
+        fprintf(stderr, "SQL error: %s\n", sqlite3_errmsg(db));
+        return -1;
+    }
+}

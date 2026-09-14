@@ -207,6 +207,8 @@ int is_equal_or_registrable_domain_suffix(const char *host,
 
 
     if(strcmp(host_cpy, host_suffix_cpy) == 0){
+        OPENSSL_free(host_cpy);
+        OPENSSL_free(host_suffix_cpy);
         return 0;
     }
 
@@ -276,7 +278,6 @@ char *generate_clientdata(struct ud_data *data, const char *type) {
     json_object_set_new(root, "challenge", json_string(encoded_challenge));
     json_object_set_new(root, "origin", json_string(data->origin));
     json_object_set_new(root, "crossOrigin", json_false());
-
     char *cd;
     // Serialize JSON object to a c string
     cd = json_dumps(root, JSON_COMPACT);
@@ -335,7 +336,7 @@ fido_cred_t *create_fido_cred_t(struct ud_data *data) {
     // Set the clientdata hash
     u8 hash[SHA256_DIGEST_LENGTH];
     SHA256((unsigned char *)data->clientdata_json,
-           strlen(data->clientdata_json), hash);
+           data->clientdata_json_len, hash);
     if (fido_cred_set_clientdata_hash(cred, hash, SHA256_DIGEST_LENGTH) !=
         FIDO_OK) {
         debug_printf(DEBUG_LEVEL_ERROR,
@@ -360,15 +361,18 @@ fido_cred_t *create_fido_cred_t(struct ud_data *data) {
                      "    Discoverable credentials: FALSE");
     }
     // Set user verification
-    int uv = FIDO_OPT_OMIT;
-    if (data->user_verification == UV_REQUIRED ||
-        data->user_verification == UV_PREFERRED) {
+    int uv;
+    if (data->user_verification == UV_REQUIRED) {
         uv = FIDO_OPT_TRUE;
         debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    User verification: TRUE");
-    } else {
+    } else if (data->user_verification == UV_DISCOURAGED){
         uv = FIDO_OPT_FALSE;
         debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    User verification: FALSE");
     }
+     else if(data->user_verification == UV_DISCOURAGED ){
+        uv = FIDO_OPT_OMIT;
+        debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    User verification: TRUE");
+     }
     if (fido_cred_set_uv(cred, uv) != FIDO_OK) {
         debug_printf(DEBUG_LEVEL_ERROR, "Failed to set user verification");
         fido_cred_free(&cred);
@@ -412,7 +416,7 @@ fido_assert_t *create_fido_assert_t(struct ud_data *data) {
                  data->rp_id);
     u8 hash[SHA256_DIGEST_LENGTH];
     SHA256((unsigned char *)data->clientdata_json,
-           strlen(data->clientdata_json), hash);
+           data->clientdata_json_len, hash);
     if (fido_assert_set_clientdata_hash(assert_t, hash, SHA256_DIGEST_LENGTH) !=
         FIDO_OK) {
         debug_printf(DEBUG_LEVEL_ERROR,
@@ -605,10 +609,16 @@ int run_ctap(struct ud_data *data, enum fido_mode mode) {
             fprintf(stderr, "Could not build attestation object");
             return -1;
         }
-        data->authdata_len = attobj_len;
-        data->authdata = OPENSSL_malloc(data->authdata_len);
-        memcpy(data->authdata, attobj,
-               data->authdata_len);
+        if(attobj_len > 8192){
+            fprintf(stderr, "The size of  attestation object exceeds allowed range");
+            return -1;
+        }
+
+
+        data->attestation_object_len = attobj_len;
+        data->attestation_object = OPENSSL_malloc(data->attestation_object_len);
+        memcpy(data->attestation_object, attobj,
+               data->attestation_object_len);
 
     } else if (success && mode == AUTHENTICATE) {
         data->authdata_len = fido_assert_authdata_raw_len(assert_t, 0);
@@ -752,7 +762,7 @@ int create_reg_indication(struct ud_data *data, const u8 **out, size_t *out_len)
 
 
 
-
+//TODO
 int create_reg_response(struct ud_data *data, SSL *ssl, const u8 **out,
                         size_t *out_len) {
     // Update ud_data with the origin
@@ -783,6 +793,9 @@ int create_reg_response(struct ud_data *data, SSL *ssl, const u8 **out,
     debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Generated client data: %s",
                  data->clientdata_json);
 
+                 
+    data->clientdata_json_len = strlen(data->clientdata_json);            
+
     // Run the CTAP
     if (run_ctap(data, REGISTER) != 0) {
         debug_printf(DEBUG_LEVEL_VERBOSE, "Failed to run CTAP");
@@ -791,9 +804,10 @@ int create_reg_response(struct ud_data *data, SSL *ssl, const u8 **out,
 
     struct reg_response packet;
     memset(&packet, 0, sizeof(packet));
-    packet.authdata = data->authdata;
-    packet.authdata_len = data->authdata_len;
+    packet.attestation_object = data->attestation_object;
+    packet.attestation_object_len = data->attestation_object_len;
     packet.clientdata_json = data->clientdata_json;
+    packet.clientdata_json_len = data->clientdata_json_len;
 
     return cbor_build(&packet, PKT_REG_RESPONSE, out, out_len);
 }
@@ -853,7 +867,7 @@ int create_auth_response(struct ud_data *data, SSL *ssl, const u8 **out,
     packet.signature = data->signature;
     packet.signature_len = data->signature_len;
     packet.clientdata_json = data->clientdata_json;
-
+    packet.clientdata_json_len = data->clientdata_json_len;
     //Optional Fields
     if (data->user_id_len != 0 && data->user_id) {
         packet.user_id = data->user_id;

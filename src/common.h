@@ -22,8 +22,6 @@ const char *get_resident_key_requirements_name(unsigned int type);
 
 const char *get_user_verification_requirements_name( unsigned int type);
 
-
-
 const char *get_action_policy_name(unsigned int type);
 //Change of the signature from unsigned int to int, because COSE Algorithms also may be negative 
 const char *get_cose_algorithm_name( int alg);

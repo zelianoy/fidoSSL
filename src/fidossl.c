@@ -276,7 +276,7 @@ int fidossl_server_parse_cb(
                     *al = SSL_AD_ACCESS_DENIED;
                     return -1;
                 }
-                // data->state = STATE_REG_SUCCESS;
+                data->state = STATE_REG_SUCCESS;
                 debug_printf(DEBUG_LEVEL_VERBOSE, "FIDO registration success!");
                 break;
             case STATE_AUTH_REQUEST_SENT:

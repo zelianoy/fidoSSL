@@ -19,6 +19,7 @@ void free_ud_data(struct ud_data *ud_data) {
     OPENSSL_free(ud_data->rp_id);
     OPENSSL_free(ud_data->rp_name);
     OPENSSL_free(ud_data->authdata);
+    OPENSSL_free(ud_data->attestation_object);
     OPENSSL_free(ud_data->clientdata_json);
     OPENSSL_free(ud_data->signature);
     OPENSSL_free(ud_data->user_id);
@@ -95,7 +96,7 @@ void free_reg_response(struct reg_response *reg_response) {
     if (reg_response == NULL) {
         return;
     }
-    OPENSSL_free(reg_response->authdata);
+    OPENSSL_free(reg_response->attestation_object);
     OPENSSL_free(reg_response->clientdata_json);
     OPENSSL_free(reg_response);
 }
