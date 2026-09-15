@@ -974,7 +974,6 @@ int process_indication(const u8 *in, size_t in_len, struct rp_data *data) {
 
    
 
-
     debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Client provided a valid ticket");
     OPENSSL_free(packet.eph_user_id);
     OPENSSL_free(encrypted_data.padded_user_display_name);
@@ -1004,7 +1003,7 @@ int process_indication(const u8 *in, size_t in_len, struct rp_data *data) {
     }
     return 0;
 }
-//TODO: the attStmt and fmt
+
 int process_reg_response(const u8 *in, size_t in_len, struct rp_data *data) {
     if (in == NULL || in_len == 0 || data == NULL) {
         return -1;
@@ -1022,57 +1021,50 @@ int process_reg_response(const u8 *in, size_t in_len, struct rp_data *data) {
         debug_printf(DEBUG_LEVEL_ERROR, "Failed to verify client data");
         return -1;
     }
+    // Enforce the server-saved attestation policy. Currently only DIRECT attestation is supported
     if(data->attestation != DIRECT){
         return -1;
     }
-
-    //TODO failure checks and memory allocation
+    // Reconstruct the server's expected credential state in libfido2
     fido_cred_t *server_side_credential = fido_cred_new();
     if(server_side_credential == NULL){
         return -1;
     }
-
-
-
-    if(fido_cred_set_type(server_side_credential, COSE_ES256) != FIDO_OK){
-        return -1;
-    }
+    // Configure the RP ID, RP name, ES256 algorithm and options saved for this request
     if(fido_cred_set_rp(server_side_credential, data->rp_id, data->rp_name) != FIDO_OK){
         return -1;
     }
-    if(fido_cred_set_clientdata(server_side_credential, (const unsigned char *)packet.clientdata_json, packet.clientdata_json_len)!= FIDO_OK){
+    if(fido_cred_set_type(server_side_credential, COSE_ES256) != FIDO_OK){
         return -1;
     }
-    
-
-
+    // Enforce user verification only if the request required them
     fido_opt_t uv_preference = FIDO_OPT_OMIT;
     if(data->user_verification == UV_REQUIRED){
         uv_preference = FIDO_OPT_TRUE;
     }
-
     if(fido_cred_set_uv(server_side_credential, uv_preference)!=FIDO_OK){
         return -1;
     }
-
-
+    // Enforce the usage of discoverable credentials only if the request required them
     fido_opt_t rk_preference = FIDO_OPT_OMIT;
     if(data->resident_key == RK_REQUIRED){
         rk_preference = FIDO_OPT_TRUE;
     }
-
-
-    
-
     if(fido_cred_set_rk(server_side_credential, rk_preference)!= FIDO_OK){
         return -1;
     }
 
-
+    // The attestation object and ClientDataJSON are untrusted client input
+    // libfido2 hashes the exact ClientDataJSON bytes internally and uses them for attestation verification
+    if(fido_cred_set_clientdata(server_side_credential, (const unsigned char *)packet.clientdata_json, packet.clientdata_json_len)!= FIDO_OK){
+        return -1;
+    }
+    // Parse the complete WebAuthn attestation object, which includes authData, fmt and attStmt
     if(fido_cred_set_attobj(server_side_credential, packet.attestation_object, packet.attestation_object_len)!= FIDO_OK){
         return -1;
     }
 
+    // DIRECT attestation in this implementation is restricted to the packed format with a nonempty x5c certificate list
     const char *fmt = fido_cred_fmt(server_side_credential);
     if(fmt == NULL){
         return -1;
@@ -1085,85 +1077,55 @@ int process_reg_response(const u8 *in, size_t in_len, struct rp_data *data) {
     }
 
     const unsigned char *leaf_cert = fido_cred_x5c_list_ptr(server_side_credential, 0);
-
     size_t leaf_cert_len = fido_cred_x5c_list_len(server_side_credential, 0);
-    
-
-    //TODO: establish the trust in x5c certificate chain, for now we skip this step
-    //TODO: packed-attestation certificate-profile validation
-
     if(leaf_cert == NULL || leaf_cert_len == 0){
         return -1;
     }
 
+    // Verify the packed attestation signature and its binding to the
+    // ClientDataJSON hash, RP ID, credential ID, COSE algorithm and credential options
+    // The validation of x5c trust path or certificate profile is missing
     if(fido_cred_verify(server_side_credential) != FIDO_OK){
         return -1;
     }
-  
 
-
-    // Now we prepare the data that is going to be stored in the database
+    // Prepare the cryptographically verified credential data that is going to be stored in the database
     struct credential *cred = OPENSSL_malloc(sizeof(struct credential));
     if (cred == NULL) {
         debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation failed");
         return -1;
     }
     memset(cred, 0, sizeof(struct credential));
-   
-
     const unsigned char *cred_id_ptr = fido_cred_id_ptr(server_side_credential);
     if(cred_id_ptr == NULL){
         return -1;
     }
-
     size_t cred_id_len = fido_cred_id_len(server_side_credential);
     if(cred_id_len > 1023 || cred_id_len == 0){
         return -1;
     }
-
     cred->id = OPENSSL_zalloc(cred_id_len);
     if(cred->id == NULL){
         return -1;
     }
-
-
     memcpy(cred->id, cred_id_ptr, cred_id_len);
     cred->id_len = cred_id_len;
-    //Rejecting the registration ceremony because credential id is already registred or database failed
-    if(cred_id_exists(data->db, cred->id, cred->id_len)!=0){
-        return -1;
-    }
 
+    // Parse the verified authenticator data to obtain the COSE public key
     const unsigned char *cred_authdata = fido_cred_authdata_raw_ptr(server_side_credential);
     size_t cred_authdata_len = fido_cred_authdata_raw_len(server_side_credential);
-    
     struct authdata *ad = parse_authdata(cred_authdata, cred_authdata_len);
     if (ad == NULL) {
         debug_printf(DEBUG_LEVEL_ERROR, "Failed to parse authdata");
         return -1;
     }
-    if(memcmp(ad->cred_id, cred->id, cred_id_len)!=0){
-        return -1;
-    }
-
-
     cred->pubkey_cose = ad->pubkey;
     ad->pubkey = NULL;
     cred->pubkey_cose_len = ad->pubkey_len;
   
-    
     cred->sign_count = fido_cred_sigcount(server_side_credential);
     cred->type = "public-key";
 
-    // Data going to be stored in the database:
-    // - The user id
-    // - The user name
-    // - The rp id
-    // - The public key in COSE format
-    // - The sign count
-    // - The credential id
-    // - The credential type (since we only support public keys, this is always
-    //   "public-key")
     if (add_creds(data->db, data->user_id, data->user_id_len, data->user_name,
                   data->rp_id, cred) != 0) {
         debug_printf(DEBUG_LEVEL_ERROR, "Failed to add credential to database");

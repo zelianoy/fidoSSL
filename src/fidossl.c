@@ -382,5 +382,15 @@ void fidossl_init_client_ctx(SSL_CTX *ctx) {
         SSL_CTX_free(ctx);
         exit(EXIT_FAILURE);
     }
+
+    if(SSL_CTX_check_private_key(ctx)<=0){
+        printf("Dummy certificate and private key do not match");
+        ERR_print_errors_fp(stderr);
+        EVP_PKEY_free(pkey);
+        SSL_CTX_free(ctx);
+        exit(EXIT_FAILURE);
+    }
+
+
     EVP_PKEY_free(pkey);
 }

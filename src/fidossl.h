@@ -15,19 +15,20 @@
 // A dummy key which is not validated
 #define FIDOSSL_CLIENT_KEY \
 "-----BEGIN PRIVATE KEY-----\n" \
-"MC4CAQAwBQYDK2VwBCIEIP+++++++++++///FIDO2+TLS+Extension///++++++\n" \
+"MC4CAQAwBQYDK2VwBCIEIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n" \
 "-----END PRIVATE KEY-----\n"
-
-// A dummy certificate which uses the dummy key
+// A dummy certificate which uses the dummy key but has invalid signature.
+//The certificate can not be cryptographically validated and only
+//corresponds to the structure of a real X509 Certificate. Its only
+//purpose is to trigger the TLS 1.3 client-certificate/FIDO-extension processing
 #define FIDOSSL_CLIENT_CRT \
 "-----BEGIN CERTIFICATE-----\n" \
-"MIHjMIGWAgEAMAUGAytlcDAeMRwwGgYDVQQDDBNGSURPMiBUTFMgRVhURU5TSU9O\n" \
-"MB4XDTI0MDgyNzE0Mjg0OFoXDTM0MDgyNTE0Mjg0OFowHjEcMBoGA1UEAwwTRklE\n" \
-"TzIgVExTIEVYVEVOU0lPTjAqMAUGAytlcAMhAAbz7p98S0c2oGUEDfT435miLn6u\n" \
-"kXv3GZUzqDLXq357MAUGAytlcANBAKkd4iy1S9EdVlzlt6UQv334Fbk6Gk2LJztR\n" \
-"pTCtt+IY3Ioos4PG8r8KwaFKdLNpf3Mof6EvtZGWa2kmqtLVsAk=\n" \
+"MIHpMIGcAhQA++FIDO2+TLS+EXTENSION+++ADAFBgMrZXAwIjEgMB4GA1UEDQwX\n" \
+"RklETzIgVExTIDEuMyBFWFRFTlNJT04wHhcNMjYwMjIzMDAwMDAwWhcNMzYwODI3\n" \
+"MDAwMDAwWjANMQswCQYDVQQFEwIwMDAqMAUGAytlcAMhADtqJ7zOtqQtYqOo0Cpv\n" \
+"DXNlMhV3HeJDpjrASKGLWdopMAUGAytlcANBAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n" \
+"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n" \
 "-----END CERTIFICATE-----\n"
-
 typedef struct fidossl_client_opts {
     enum client_mode {
         FIDOSSL_REGISTER,

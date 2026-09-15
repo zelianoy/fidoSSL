@@ -361,7 +361,7 @@ fido_cred_t *create_fido_cred_t(struct ud_data *data) {
                      "    Discoverable credentials: FALSE");
     }
     // Set user verification
-    int uv;
+    int uv = UV_REQUIRED;
     if (data->user_verification == UV_REQUIRED) {
         uv = FIDO_OPT_TRUE;
         debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    User verification: TRUE");
@@ -369,7 +369,7 @@ fido_cred_t *create_fido_cred_t(struct ud_data *data) {
         uv = FIDO_OPT_FALSE;
         debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    User verification: FALSE");
     }
-     else if(data->user_verification == UV_DISCOURAGED ){
+     else if(data->user_verification == UV_PREFERRED ){
         uv = FIDO_OPT_OMIT;
         debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    User verification: TRUE");
      }

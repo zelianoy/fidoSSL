@@ -39,12 +39,12 @@
 - added serialization and parsing of excluded credebtials descriptors
 - added AES-256-GCM encryption and decryption of the encrypted data
 - moved timeout, authenticator selection criteria, attestation preference and extensions to the optional parameters map
-- now the authenticator creates an attestation object, which contains authenticator data and attestation statement. The Relying Party cryptographically validates the attestation statement, using the certificate supplied by authenticator. The certificate trust chain is not validated.
+
 
 ### Registration Response
 
 - message type is now 5
-- now correctly uses the complete attestation object
+- now the authenticator creates an attestation object, which contains authenticator data and attestation statement. The Relying Party cryptographically validates the attestation statement, using the certificate supplied by authenticator. The certificate trust chain is not validated.
 
 ### Authentication Indication
 
