@@ -67,15 +67,19 @@ int sha256_hash(const u8 *in, size_t inlen, u8 **out, size_t *outlen) {
 
 int aes_gcm_encrypt(const u8 *plain, size_t plain_len, u8 **cypher, size_t *cypher_len, const u8 *key, size_t key_len) {
     EVP_CIPHER_CTX *ctx;
-    int len;
-    int ciphertext_len;
-    // Hardcoded IV. We must not generate a new one since the GCM key is only
-    // used once
+    int len = 0;
+    int ciphertext_len = 0;
+    // The iv has to be freshly generated for every encryption, since we have more than one encrypted object
     // Needs to be 12 Bytes long
-    //TODO: since we now have encrypted data arrays in more than one message, IV can not be reused and should be generated for every new encryption
-    //we should transmit it with the tag
-    u8 *iv = (u8 *)"012345678901";
+    //TODO: unified error cleanup path
+
+    //the encryption format is 12-byte iv || ciphertext || 16-byte tag
+    u8 *iv = 0;
+    size_t iv_len = 12;
+    if(create_random_bytes(iv_len, &iv)!=0) return -1;
+
     u8 tag[16]; // GCM Tag
+    size_t tag_len = 16;
 
     // Check for valid key length
     if (key_len != 16 && key_len != 24 && key_len != 32) {
@@ -83,8 +87,15 @@ int aes_gcm_encrypt(const u8 *plain, size_t plain_len, u8 **cypher, size_t *cyph
         return -1;
     }
 
-    // Allocate memory for cypher text and 16 bytes extra for GCM tag
-    *cypher = (u8 *)malloc(plain_len + 16);
+    // Allocate memory for iv (12 bytes) and cypher text and 16 bytes extra for GCM tag
+    *cypher = (u8 *)malloc(plain_len + tag_len + iv_len);
+    if (*cypher == NULL){
+        printf("Memory allocation failed.\n");
+        return -1;
+    }
+    // Append the iv to the begining of the cipher text
+    memcpy(*cypher, iv, iv_len);
+    ciphertext_len += iv_len;
 
     // Create and initialize the context
     if(!(ctx = EVP_CIPHER_CTX_new())) return -1;
@@ -94,7 +105,7 @@ int aes_gcm_encrypt(const u8 *plain, size_t plain_len, u8 **cypher, size_t *cyph
         return -1;
 
     // Set IV length, OpenSSL might not set this automatically for GCM
-    if(1 != EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, NULL))
+    if(1 != EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, iv_len, NULL))
         return -1;
 
     // Initialize key and IV
@@ -103,25 +114,28 @@ int aes_gcm_encrypt(const u8 *plain, size_t plain_len, u8 **cypher, size_t *cyph
 
     // Provide the message to be encrypted, and obtain the encrypted output.
     // EVP_EncryptUpdate can be called multiple times if necessary
-    if(1 != EVP_EncryptUpdate(ctx, *cypher, &len, plain, plain_len))
+    if(1 != EVP_EncryptUpdate(ctx, *cypher + iv_len, &len, plain, plain_len))
         return -1;
-    ciphertext_len = len;
+    ciphertext_len += len;
 
     // Finalize the encryption. Normally ciphertext bytes may be written at
     // this stage, but this does not occur in GCM mode
-    if(1 != EVP_EncryptFinal_ex(ctx, *cypher + len, &len)) return -1;
+    if(1 != EVP_EncryptFinal_ex(ctx, *cypher + ciphertext_len , &len)) return -1;
     ciphertext_len += len;
 
+
     // Get the tag
-    if(1 != EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, tag))
+    if(1 != EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, tag_len, tag))
         return -1;
 
     // Append the tag to the end of the cipher text
-    memcpy(*cypher + ciphertext_len, tag, sizeof(tag));
-    ciphertext_len += sizeof(tag);
+    memcpy(*cypher + ciphertext_len, tag, tag_len);
+    ciphertext_len += tag_len;
+     
 
     // Clean up
     EVP_CIPHER_CTX_free(ctx);
+    OPENSSL_free(iv);
 
     *cypher_len = ciphertext_len;
     return 0;
@@ -129,11 +143,14 @@ int aes_gcm_encrypt(const u8 *plain, size_t plain_len, u8 **cypher, size_t *cyph
 
 int aes_gcm_decrypt(const u8 *cypher, size_t cypher_len, u8 **plain, size_t *plain_len, const u8 *key, size_t key_len) {
     EVP_CIPHER_CTX *ctx;
-    int len;
+    int len = 0;
     int ret = -1;
-    // Assume IV is the same 12 bytes as used in encryption, and tag is appended at the end of cypher
-    // Needs to be 12 Bytes long
-    u8 *iv = (u8 *)"012345678901";
+
+    // The iv is extracted from first 12 bytes of cyphertext
+    u8 iv[12];
+    memcpy(iv, cypher, 12);
+
+
     u8 tag[16];
 
     // Check key length for validity
@@ -145,7 +162,9 @@ int aes_gcm_decrypt(const u8 *cypher, size_t cypher_len, u8 **plain, size_t *pla
     // Extract the tag from the end of the cypher
     memcpy(tag, cypher + cypher_len - 16, 16);
 
-    // Adjust cypher_len to exclude the tag
+    // Adjust cypher_len to exclude the iv
+    cypher_len -= 12;
+    // Adjust cypher_len to exclude the tag 
     cypher_len -= 16;
 
     // Allocate memory for plain text
@@ -172,7 +191,7 @@ int aes_gcm_decrypt(const u8 *cypher, size_t cypher_len, u8 **plain, size_t *pla
         goto cleanup;
 
     // Provide the message to be decrypted
-    if (!EVP_DecryptUpdate(ctx, *plain, &len, cypher, cypher_len))
+    if (!EVP_DecryptUpdate(ctx, *plain, &len, cypher + 12, cypher_len))
         goto cleanup;
     *plain_len = len;
 
