@@ -12,6 +12,9 @@
 #include <fido/es256.h>
 #include <jansson.h>
 #include <openssl/decoder.h>
+#include <openssl/rand.h>
+#include <openssl/hmac.h>
+#include <openssl/evp.h>
 #include <sys/stat.h>
 
 // SSL_CTX objects can hold arbitray external data. This index points to the
@@ -55,6 +58,12 @@ struct rp_data *init_rp(SSL *ssl, void *server_opts) {
     memset(data, 0, sizeof(struct rp_data));
 
     debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Configuring Relying Party:");
+    // Generate an episode key
+    data->k_ep_len = 32;
+    data->k_ep = OPENSSL_zalloc(data->k_ep_len);
+    RAND_priv_bytes(data->k_ep, data->k_ep_len);
+    //For debug purposes we can display the episode key
+    debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE, "    Episode key: ", data->k_ep, data->k_ep_len);
 
     // Copy required data from the server options
     data->rp_id = OPENSSL_zalloc(strlen(opts->rp_id) + 1);
@@ -657,30 +666,42 @@ int verify_authdata(struct rp_data *data, struct authdata *authdata,
 int create_pre_response(struct rp_data *data, const u8 **out,
                            size_t *out_len) {
     // Relying Party creates a 256 byte ephemeral user ID, according to I-D, Section 12.2
+    //Create a ephemeral user id but do not save it to the rp yet
     data->eph_user_id_len = 256;
-    if (create_random_bytes(data->eph_user_id_len, &data->eph_user_id) != 0) {
+    u8 *eph_user_id;
+    if (create_random_bytes(data->eph_user_id_len, &eph_user_id) != 0) {
         debug_printf(DEBUG_LEVEL_ERROR, "Failed to create random bytes");
         return -1;
     }
     debug_printf(DEBUG_LEVEL_MORE_VERBOSE,
                  "Created an ephemeral user id from random bytes");
-    // Create a 32 byte key which is used to encrypt the user id
-    data->gcm_key_len = 32;
-    if (create_random_bytes(data->gcm_key_len, &data->gcm_key) != 0) {
-        debug_printf(DEBUG_LEVEL_ERROR, "Failed to create random bytes");
+    // Derived AES-256-GCM from ephemeral user id using HMAC-SHA256
+    size_t gcm_key_len = 32;
+    u8 *gcm_key = OPENSSL_zalloc(gcm_key_len);
+    unsigned int md_len = 0;
+    HMAC(EVP_sha256(), data->k_ep, data->k_ep_len, eph_user_id, data->eph_user_id_len, gcm_key, &md_len);
+    debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE,
+                 "Derived AES-256-GCM key from ephemeral user id with HMAC-SHA256: ", gcm_key, md_len );
+
+    //extra checking whether the size of resulting HMAC is 32 bytes
+    if(md_len != 32){
+        debug_printf(DEBUG_LEVEL_ERROR, "The length of HMAC output is not the extpected 32 bytes");
         return -1;
     }
-    debug_printf(DEBUG_LEVEL_MORE_VERBOSE,
-                 "Created a GCM key from random bytes");
     // Prepare the response packet
     struct pre_response packet;
     memset(&packet, 0, sizeof(struct pre_response));
-    packet.eph_user_id = data->eph_user_id;
+    packet.eph_user_id = eph_user_id;
     packet.eph_user_id_len = data->eph_user_id_len;
-    packet.gcm_key = data->gcm_key;
-    packet.gcm_key_len = data->gcm_key_len;
+    packet.gcm_key = gcm_key;
+    packet.gcm_key_len = md_len;
 
-    return cbor_build(&packet, PKT_PRE_RESPONSE, out, out_len);
+
+    int result = cbor_build(&packet, PKT_PRE_RESPONSE, out, out_len);
+    OPENSSL_free(eph_user_id);
+    OPENSSL_clear_free(gcm_key, gcm_key_len);
+    return result;
+
 }
 //TODO!
 int create_reg_request(struct rp_data *data, const u8 **out,
@@ -893,20 +914,22 @@ int process_indication(const u8 *in, size_t in_len, struct rp_data *data) {
         data->state = STATE_PRE_INDICATION_RECEIVED;
     } else if (data->state == STATE_PRE_RESPONSE_SENT &&
                type == PKT_REG_INDICATION) {
-        if (data->eph_user_id_len != packet.eph_user_id_len ||
-            memcmp(data->eph_user_id, packet.eph_user_id,
-                   data->eph_user_id_len) != 0) {
+        //we check only length because the server does not store the ephemeral user id after the pre response
+        if (data->eph_user_id_len != packet.eph_user_id_len) {
             debug_printf(DEBUG_LEVEL_ERROR, "Unknown ephemeral user id");
-            OPENSSL_free(packet.eph_user_id);
             OPENSSL_free(packet.encrypted_data);
             return -1;
         }
-        debug_printf(
-            DEBUG_LEVEL_MORE_VERBOSE,
-            "Client provided ephemeral user id matches the stored one");
-        assert(data->gcm_key != NULL);
-        assert(data->gcm_key_len != 0);
-
+    //Derive the gcm key from provided ephemeral user id
+    data->gcm_key = OPENSSL_zalloc(32);
+    unsigned int md_len = 0;
+    HMAC(EVP_sha256(), data->k_ep, data->k_ep_len, packet.eph_user_id, packet.eph_user_id_len, data->gcm_key, &md_len);
+    debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE, "The derived key after the start of the registartion is ", data->gcm_key, md_len);
+    if(md_len != 32){
+        debug_printf(DEBUG_LEVEL_ERROR, "The size of a derived gcm key is not 32");
+        return -1;
+    }
+    data->gcm_key_len = md_len;
 
     u8 *cbor_array_decrypted = NULL;
     size_t cbor_array_decrypted_len = 0;

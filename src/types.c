@@ -9,8 +9,9 @@ void free_rp_data(struct rp_data *rp_data) {
     OPENSSL_free(rp_data->user_name);
     OPENSSL_free(rp_data->user_display_name);
     OPENSSL_free(rp_data->eph_user_id);
-    OPENSSL_free(rp_data->gcm_key);
+    OPENSSL_clear_free(rp_data->gcm_key, rp_data->gcm_key_len);
     OPENSSL_free(rp_data->ticket);
+    OPENSSL_clear_free(rp_data->k_ep, rp_data->k_ep_len);
     OPENSSL_free(rp_data);
 }
 
@@ -26,7 +27,7 @@ void free_ud_data(struct ud_data *ud_data) {
     OPENSSL_free(ud_data->user_name);
     OPENSSL_free(ud_data->user_display_name);
     OPENSSL_free(ud_data->eph_user_id);
-    OPENSSL_free(ud_data->gcm_key);
+    OPENSSL_clear_free(ud_data->gcm_key, ud_data->gcm_key_len);
     OPENSSL_free(ud_data->cred_id);
     OPENSSL_free(ud_data->ticket);
     if (ud_data->exclude_credentials != NULL && ud_data->exclude_credentials_len > 0) {
@@ -67,7 +68,7 @@ void free_pre_response(struct pre_response *pre_response) {
         return;
     }
     OPENSSL_free(pre_response->eph_user_id);
-    OPENSSL_free(pre_response->gcm_key);
+    OPENSSL_clear_free(pre_response->gcm_key, pre_response->gcm_key_len);
     OPENSSL_free(pre_response);
 }
 

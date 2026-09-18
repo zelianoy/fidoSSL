@@ -107,6 +107,9 @@ struct rp_data {
     char *rp_id;
     char *rp_name;
     USER_VERIF_REQ user_verification;
+    //episodenschlüssel
+    u8 *k_ep;
+    size_t k_ep_len;
     // TODO
     POLICY user_presence;
     RESIDENT_KEY_REQ resident_key;
