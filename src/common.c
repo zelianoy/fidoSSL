@@ -365,23 +365,23 @@ int bit_padding(u8 *padded_data, const char *data, size_t data_len){
     }
 
     if(data_len == 0){
-        debug_printf(DEBUG_LEVEL_ERROR, "Empty user display name");
+        debug_printf(DEBUG_LEVEL_ERROR, "Empty input");
         return -1;
     }
 
-    if(data_len > 256){
-        debug_printf(DEBUG_LEVEL_ERROR, "Size of user display name is bigger than 256 bytes");
+    if(data_len > 255){
+        debug_printf(DEBUG_LEVEL_ERROR, "Size of input is bigger than 255 bytes");
         return -1;
     }
-
     memcpy(padded_data, data, data_len);
-    if(data_len < 256){
-        memset(padded_data + data_len, 0x80, 1);
-        memset(padded_data + data_len + 1, 0x00, 256 - data_len - 1);
+
+    memset(padded_data + data_len, 0x80, 1);
+
+    if(data_len < 255){
+        memset(padded_data + data_len + 1, 0x00, 255 - data_len);
     }
   return 0;
 }
-
 
 int remove_bit_padding(char *unpadded_data, const u8 *padded_data, size_t *unpadded_len){
     if(unpadded_data == NULL || padded_data == NULL ||  unpadded_len == NULL){
@@ -396,12 +396,6 @@ int remove_bit_padding(char *unpadded_data, const u8 *padded_data, size_t *unpad
             memcpy(unpadded_data, padded_data, i);
             unpadded_data[i] = '\0';
             *unpadded_len = (size_t)i;
-            return 0;
-        }
-        if(padded_data[i]!= 0x80 && i == 255){
-            memcpy(unpadded_data, padded_data, i + 1);
-            unpadded_data[i + 1] = '\0';
-            *unpadded_len = (size_t)i+1;
             return 0;
         }
         else{
