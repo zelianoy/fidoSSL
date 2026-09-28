@@ -39,7 +39,7 @@
 - added serialization and parsing of excluded credebtials descriptors
 - added AES-256-GCM encryption and decryption of the encrypted data
 - moved timeout, authenticator selection criteria, attestation preference and extensions to the optional parameters map
-
+- the AES-GCM-KEY is now derived from ephemeral user id
 
 ### Registration Response
 
@@ -65,3 +65,7 @@
 ## Other Changes
 
 - added option to use SSLKEYLOGFILE to log SSL session keys
+- updated the dummy tls certificate
+- IV is now freshly generated for every encryption
+- corrected encryption and decryption functions
+- limited the user name and user display name to 255 bytes. This preserves one byte for the 0x80 delimiter and enables unambiguous removal of the padding
