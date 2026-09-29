@@ -278,8 +278,6 @@ const char *get_action_policy_name(unsigned int type) {
     }
 }
 
-
-
 const char *get_attestation_conveyance_pref_name(unsigned int type){
     switch (type) {
         case NONE:
@@ -294,7 +292,6 @@ const char *get_attestation_conveyance_pref_name(unsigned int type){
             return "Unknown attestation conveyance prefernce";       
     }
 }
-
 
 const char *get_user_verification_requirements_name( unsigned int type){
   
@@ -313,12 +310,6 @@ const char *get_user_verification_requirements_name( unsigned int type){
     }
 }
 
-
-
-
-
-
-
 const char *get_resident_key_requirements_name(unsigned int type){
 
     switch (type) {
@@ -335,7 +326,6 @@ const char *get_resident_key_requirements_name(unsigned int type){
             return "Unknown resident key requirement name";    
     }
 }
-
 
 const char *get_cose_algorithm_name(int alg) {
     switch (alg) {
