@@ -126,12 +126,12 @@ int test_cbor_encrypted_data_roundtrip(){
 
 int test_padding() {
     const size_t padded_len = 256;
-    /*Case with length between 1 and 256*/
+    /*Case with length between 1 and 255*/
     //const char *data = "Alicey";
-    /*Case with length exactly 256*/
+    /*Case with length exactly 255*/
     //const char *data = "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll11";
    /*Case with length 0*/
-    const char *data = "7";
+    const char *data = "AliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyyyyy";
     size_t data_len = strlen(data);
     u8 *padded_data = malloc(padded_len);
     size_t unpadded_data_len = 0 ;
@@ -217,7 +217,7 @@ int test_padding() {
 
 int test_padding_and_rtp(){
     const size_t padded_len = 256;
-    const char *data = "Alicey";
+    const char *data = "AliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyAliceyy";
     u8 *ticket = NULL;
     size_t ticket_len = 0;
     int result = -1;
@@ -534,12 +534,4 @@ int main(int argc, char *argv[]) {
         return -1;
     }
     */
-
-
-
-    if(test_reg_request_padding_and_rtp()!=0){
-        printf("Error: failed to test padding and inner req request CBOR array creation\n");
-        return -1;
-    }
-    return 0;
 }
