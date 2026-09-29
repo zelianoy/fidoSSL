@@ -600,7 +600,6 @@ int verify_clientdata(struct rp_data *data, const char *clientdata_json,
     return 0;
 }
 
-//TODO
 int verify_authdata(struct rp_data *data, struct authdata *authdata,
                     enum fido_mode mode, int sign_count) {
     if (data == NULL || authdata == NULL) {
@@ -665,7 +664,6 @@ int verify_authdata(struct rp_data *data, struct authdata *authdata,
 
 int create_pre_response(struct rp_data *data, const u8 **out,
                            size_t *out_len) {
-    // Relying Party creates a 256 byte ephemeral user ID, according to I-D, Section 12.2
     //Create a ephemeral user id but do not save it to the rp yet
     data->eph_user_id_len = 256;
     u8 *eph_user_id;
@@ -675,9 +673,13 @@ int create_pre_response(struct rp_data *data, const u8 **out,
     }
     debug_printf(DEBUG_LEVEL_MORE_VERBOSE,
                  "Created an ephemeral user id from random bytes");
-    // Derived AES-256-GCM from ephemeral user id using HMAC-SHA256
+    // RP ID derives AES-256-GCM from ephemeral user id using HMAC-SHA256
     size_t gcm_key_len = 32;
     u8 *gcm_key = OPENSSL_zalloc(gcm_key_len);
+    if(gcm_key == NULL){
+        debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation failed");
+        return -1;
+    }
     unsigned int md_len = 0;
     HMAC(EVP_sha256(), data->k_ep, data->k_ep_len, eph_user_id, data->eph_user_id_len, gcm_key, &md_len);
     debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE,
@@ -703,7 +705,7 @@ int create_pre_response(struct rp_data *data, const u8 **out,
     return result;
 
 }
-//TODO!
+
 int create_reg_request(struct rp_data *data, const u8 **out,
                        size_t *out_len) {
     struct reg_request packet;
@@ -738,7 +740,7 @@ int create_reg_request(struct rp_data *data, const u8 **out,
     //packet.pub_key_cred_params[4].alg = COSE_ECDH_ES256;
     //packet.pub_key_cred_params[5].alg = COSE_RS256;
     //packet.pub_key_cred_params[6].alg = COSE_RS1;
-   // for(size_t i = 0; i < 1; i++){
+    // for(size_t i = 0; i < 1; i++){
     //    packet.pub_key_cred_params[i].type = PUBLIC_KEY;
     //}
 
@@ -851,8 +853,6 @@ int create_reg_request(struct rp_data *data, const u8 **out,
     if(data->attestation !=0 ){
         packet.attestation = data->attestation;
     }
-
-
 
     if(data->extensions!=0 && data->extensions_len > 0){
         packet.extensions = data->extensions;
