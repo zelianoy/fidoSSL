@@ -701,7 +701,7 @@ int create_reg_indication(struct ud_data *data, const u8 **out, size_t *out_len)
 
     data->user_display_name_len = strlen(data->user_display_name);
 
-    if(data->user_display_name_len>256 || data->user_display_name_len<1){
+    if(data->user_display_name_len>255 || data->user_display_name_len<1){
         goto err;
     }
 
