@@ -17,13 +17,13 @@
 "-----BEGIN PRIVATE KEY-----\n" \
 "MC4CAQAwBQYDK2VwBCIEIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n" \
 "-----END PRIVATE KEY-----\n"
-// A dummy certificate which uses the dummy key but has invalid signature.
+//A dummy certificate which uses the dummy key but has invalid signature.
 //The certificate can not be cryptographically validated and only
 //corresponds to the structure of a real X509 Certificate. Its only
 //purpose is to trigger the TLS 1.3 client-certificate/FIDO-extension processing
 #define FIDOSSL_CLIENT_CRT \
 "-----BEGIN CERTIFICATE-----\n" \
-"MIGoMIGOAgEAMAoGCCqGSM49BAMCMCIxIDAeBgNVBA0MF0ZJRE8yIFRMUyAxLjMg\n" \
+"MIGoMIGOAgEBMAoGCCqGSM49BAMCMCIxIDAeBgNVBA0MF0ZJRE8yIFRMUyAxLjMg\n" \
 "RVhURU5TSU9OMB4XDTI2MDIyMzAwMDAwMFoXDTM2MDgyNzAwMDAwMFowDTELMAkG\n" \
 "A1UEBRMCMDAwKjAFBgMrZXADIQA7aie8zrakLWKjqNAqbw1zZTIVdx3iQ6Y6wEih\n" \
 "i1naKTAKBggqhkjOPQQDAgMJADAGAgEBAgEB\n" \

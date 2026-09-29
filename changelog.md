@@ -69,3 +69,4 @@
 - IV is now freshly generated for every encryption
 - corrected encryption and decryption functions
 - limited the user name and user display name to 255 bytes. This preserves one byte for the 0x80 delimiter and enables unambiguous removal of the padding
+- updated the dummy tls certificate to use the RFC 5280-compliant serial number '0x01' and added its mathing all zero-E25519 test key
