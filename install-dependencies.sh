@@ -8,7 +8,7 @@
 set -e
 
 # List of required commands
-required_commands=("unzip" "curl" "cmake" "make" "tar")
+required_commands=("unzip" "curl" "cmake" "make" "tar" "pkg-config")
 
 for cmd in "${required_commands[@]}"; do
     if ! command -v "$cmd" &> /dev/null; then
@@ -110,7 +110,7 @@ EOF
 #################### libfido2 ####################
 
 build_libfido() {
-    LIBFIDO2_VERSION="1.14.0"
+    LIBFIDO2_VERSION="1.15.0"
     LIBFIDO2_URL="https://developers.yubico.com/libfido2/Releases/libfido2-${LIBFIDO2_VERSION}.tar.gz"
     LIBFIDO2_DIR="${LIBS_DIR}/libfido2-v${LIBFIDO2_VERSION}"
     LIBFIDO2_BUILD_DIR="${LIBFIDO2_DIR}/build"
@@ -130,21 +130,21 @@ build_libfido() {
         cmake -B build
         make -C build
         popd > /dev/null
-
-        cat <<EOF > "${PKGCONFIG_DIR}/libfido2.pc"
+    fi
+    # Regenerate pkg-config even if libfido2 is already built.
+    cat <<EOF > "${PKGCONFIG_DIR}/libfido2.pc"
 prefix=${PROJECT_ROOT}
 exec_prefix=\${prefix}
-libdir=\${exec_prefix}/libs/libfido2-v1.14.0/build/src
-includedir=\${prefix}/libs/libfido2-v1.14.0/src
+libdir=\${exec_prefix}/libs/libfido2-v${LIBFIDO2_VERSION}/build/src
+includedir=\${prefix}/libs/libfido2-v${LIBFIDO2_VERSION}/src
 
 Name: libfido2
 Description: Library for FIDO U2F and FIDO 2.0
-Version: 1.14.0
+Version: ${LIBFIDO2_VERSION}
 Requires: libcrypto
 Libs: -L\${libdir} -lfido2
 Cflags: -I\${includedir}
 EOF
-    fi
 }
 
 #################### jansson ####################
