@@ -1493,7 +1493,7 @@ cbor_encode_attestation_statement(CborEncoder *mapEncoder,
     const unsigned char *x5c_ptr = fido_cred_x5c_ptr(cred);
     size_t x5c_len = fido_cred_x5c_len(cred);
 
-    if (type != COSE_ES256 || sig_ptr == NULL || sig_len == 0 ||
+    if (type != FIDOSSL_COSE_ES256 || sig_ptr == NULL || sig_len == 0 ||
         x5c_ptr == NULL || x5c_len == 0) {
         warnx("cbor_encode_attestation_statement: fido_cred invalid", "");
         return CborUnknownError;

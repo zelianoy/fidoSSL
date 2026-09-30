@@ -329,23 +329,23 @@ const char *get_resident_key_requirements_name(unsigned int type){
 
 const char *get_cose_algorithm_name(int alg) {
     switch (alg) {
-    case COSE_ES256:
+    case FIDOSSL_COSE_ES256:
         return "ES256";
-    case COSE_EDDSA:
+    case FIDOSSL_COSE_EDDSA:
         return "EDDSA";
-    case COSE_ECDH_ES256:
+    case FIDOSSL_COSE_ECDH_ES256:
         return "ECDH_ES256";
-    case COSE_ES384:
+    case FIDOSSL_COSE_ES384:
         return "ES384";
-    case COSE_RS256:
+    case FIDOSSL_COSE_RS256:
         return "RS256";
-    case COSE_RS1:
+    case FIDOSSL_COSE_RS1:
         return "RS1";  
     //Added new COSE algorithm, according to the I-D      
-    case COSE_ES512:
+    case FIDOSSL_COSE_ES512:
         return "ES512";
     default:
-        return "Unknown Algorithm";
+        return "Unknown COSE Algorithm";
     }
 }
 

@@ -359,7 +359,7 @@ PublicKey *parse_cose_key(const u8 *in, size_t in_len) {
                 return NULL;
             }
             cbor_value_get_int(&map, &pk->alg);
-            if (pk->alg != COSE_ES256) {
+            if (pk->alg != FIDOSSL_COSE_ES256) {
                 debug_printf(DEBUG_LEVEL_ERROR,
                              "COSE alg is not ES256. Only ES256 is "
                              "supported at the moment");
@@ -401,7 +401,7 @@ PublicKey *parse_cose_key(const u8 *in, size_t in_len) {
         }
         cbor_value_advance(&map);
     }
-    if (pk->alg == COSE_ES256) {
+    if (pk->alg == FIDOSSL_COSE_ES256) {
         pk->es256 = es256_pk_new();
         if (es256_pk_from_ptr(pk->es256, point, 65) != FIDO_OK) {
             debug_printf(DEBUG_LEVEL_ERROR, "Failed to convert public key");
@@ -730,17 +730,16 @@ int create_reg_request(struct rp_data *data, const u8 **out,
     if(packet.pub_key_cred_params == NULL){
         return -1;
     }
-    //TODO: Implement all of the other 6 COSE Algorithms
     packet.pub_key_cred_params_len = 1;
-    packet.pub_key_cred_params[0].alg = COSE_ES256;
+    packet.pub_key_cred_params[0].alg = FIDOSSL_COSE_ES256;
     packet.pub_key_cred_params[0].type = PUBLIC_KEY;
-    //packet.pub_key_cred_params[1].alg = COSE_ES384;
-    //packet.pub_key_cred_params[2].alg = COSE_ES512;
-    //packet.pub_key_cred_params[3].alg = COSE_EDDSA;
-    //packet.pub_key_cred_params[4].alg = COSE_ECDH_ES256;
-    //packet.pub_key_cred_params[5].alg = COSE_RS256;
-    //packet.pub_key_cred_params[6].alg = COSE_RS1;
-    // for(size_t i = 0; i < 1; i++){
+    //packet.pub_key_cred_params[1].alg = FIDOSSL_COSE_ES384;
+    //packet.pub_key_cred_params[2].alg = FIDOSSL_COSE_ES512;
+    //packet.pub_key_cred_params[3].alg = FIDOSSL_COSE_EDDSA;
+    //packet.pub_key_cred_params[4].alg = FIDOSSL_COSE_ECDH_ES256;
+    //packet.pub_key_cred_params[5].alg = FIDOSSL_COSE_RS256;
+    //packet.pub_key_cred_params[6].alg = FIDOSSL_COSE_RS1;
+    // for(size_t i = 0; i < 7; i++){
     //    packet.pub_key_cred_params[i].type = PUBLIC_KEY;
     //}
 
@@ -1057,7 +1056,7 @@ int process_reg_response(const u8 *in, size_t in_len, struct rp_data *data) {
     if(fido_cred_set_rp(server_side_credential, data->rp_id, data->rp_name) != FIDO_OK){
         return -1;
     }
-    if(fido_cred_set_type(server_side_credential, COSE_ES256) != FIDO_OK){
+    if(fido_cred_set_type(server_side_credential, FIDOSSL_COSE_ES256) != FIDO_OK){
         return -1;
     }
     // Enforce user verification only if the request required them
@@ -1241,7 +1240,7 @@ int process_auth_response(const u8 *in, size_t in_len, struct rp_data *data) {
     fido_assert_set_sig(assert, 0, packet.signature, packet.signature_len);
 
     // Verify the signature
-    if (fido_assert_verify(assert, 0, COSE_ES256, pk->es256) != FIDO_OK) {
+    if (fido_assert_verify(assert, 0, FIDOSSL_COSE_ES256, pk->es256) != FIDO_OK) {
         debug_printf(DEBUG_LEVEL_ERROR, "Failed to verify signature");
         return -1;
     }

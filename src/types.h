@@ -53,7 +53,18 @@ typedef enum attestation_conveyance_preference{
     INDIRECT = 2,
     DIRECT = 3,
     ENTERPRISE = 4
-}ATTESTATION_CONVEYANCE_PREF;
+} ATTESTATION_CONVEYANCE_PREF;
+
+
+typedef enum cose_alg_identifier{
+    FIDOSSL_COSE_ES256 = -7,
+    FIDOSSL_COSE_ES384 = -35,
+    FIDOSSL_COSE_ES512 = -36,
+    FIDOSSL_COSE_EDDSA = -8,
+    FIDOSSL_COSE_ECDH_ES256 = -25,
+    FIDOSSL_COSE_RS256 = -257,
+    FIDOSSL_COSE_RS1 = -65535
+} COSE_ALG_ID;
 
 
 
@@ -315,10 +326,7 @@ struct reg_request {
     char *rp_id;
     char *rp_name;
     u8 *encrypted_data;
-    size_t encrypted_data_len;
-    // Array of enum values (int) defined in libfido2 param.h. Values are:
-    // COSE_UNSPEC COSE_ES256 COSE_EDDSA COSE_ECDH_ES256 COSE_ES384 COSE_RS256 COSE_RS1 
-   
+    size_t encrypted_data_len;  
     struct pub_key_cred_param *pub_key_cred_params;
     size_t pub_key_cred_params_len;
     
