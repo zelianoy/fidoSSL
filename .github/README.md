@@ -21,6 +21,7 @@ This project serves as a foundational draft for further studies and development 
   - **tinycbor** (CBOR encoder & parser)
   - **sqlite3** (SQLite database)
   - **libjansson** (JSON encoder & parser)
+  - **libpsl** (Public Suffix List validation for RP IDs)
 - Basic TLS concepts and how it is used in openSSL [[link1](https://www.openssl.org/docs/man3.2/man7/ossl-guide-introduction.html), [link2](https://www.openssl.org/docs/man3.2/man7/ossl-guide-tls-introduction.html), [link3](https://www.openssl.org/docs/man3.2/man7/ossl-guide-tls-client-non-block.html), [link4](https://www.openssl.org/docs/man3.2/man7/ossl-guide-tls-client-block.html)]
 
 ### Installation
@@ -56,7 +57,7 @@ On macOS, the dependencies can be installed with [homebrew](https://brew.sh/)
 brew update
 
 # Install dependencies
-brew install openssl libfido2 sqlite jansson
+brew install openssl libfido2 sqlite jansson libpsl pkg-config
 ```
 
 ###### ubuntu
@@ -68,7 +69,7 @@ On Ubuntu, dependencies can be installed with [aptitude](https://wiki.ubuntuuser
 sudo apt update
 
 # Install dependencies
-sudo apt install build-essential libssl-dev libfido2-dev libsqlite3-dev libjansson-dev
+sudo apt install build-essential libssl-dev libfido2-dev libsqlite3-dev libjansson-dev libpsl-dev
 ```
 
 #### Building the Static Library
