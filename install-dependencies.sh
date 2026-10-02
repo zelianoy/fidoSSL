@@ -27,7 +27,7 @@ mkdir -p "${PKGCONFIG_DIR}"
 #################### SQLite ####################
 
 build_sqlite() {
-    SQLITE_VERSION="3.45.2"
+    SQLITE_VERSION="3.53.4"
     SQLITE_URL="https://github.com/sqlite/sqlite/archive/refs/tags/version-${SQLITE_VERSION}.zip"
     SQLITE_DIR="${LIBS_DIR}/sqlite-v${SQLITE_VERSION}"
     SQLITE_BUILD_DIR="${SQLITE_DIR}/build"
@@ -57,12 +57,12 @@ build_sqlite() {
         cat <<EOF > "${PKGCONFIG_DIR}/sqlite3.pc"
 prefix=${PROJECT_ROOT}
 exec_prefix=\${prefix}
-libdir=\${exec_prefix}/libs/sqlite-v3.45.2/build/.libs
-includedir=\${prefix}/libs/sqlite-v3.45.2/src
+libdir=\${exec_prefix}/libs/sqlite-v${SQLITE_VERSION}/build/.libs
+includedir=\${prefix}/libs/sqlite-v${SQLITE_VERSION}/src
 
 Name: sqlite3
 Description: SQLite3 library
-Version: 3.45.2
+Version: ${SQLITE_VERSION}
 Libs: -L\${libdir} -lsqlite3
 Cflags: -I\${includedir}
 EOF
@@ -72,7 +72,7 @@ EOF
 #################### tinycbor ####################
 
 build_tinycbor() {
-    TINYCBOR_VERSION="0.6.0"
+    TINYCBOR_VERSION="7.0"
     TINYCBOR_URL="https://github.com/intel/tinycbor/archive/refs/tags/v${TINYCBOR_VERSION}.zip"
     TINYCBOR_DIR="${LIBS_DIR}/tinycbor-v${TINYCBOR_VERSION}"
 
@@ -85,21 +85,26 @@ build_tinycbor() {
         rm "${LIBS_DIR}/${TINYCBOR_VERSION}.zip"
         mv "${LIBS_DIR}/tinycbor-${TINYCBOR_VERSION}" "${TINYCBOR_DIR}"
 
-        echo "Building tinycbor..."
+        echo "Building tinycbor...with CMake..."
         pushd "${TINYCBOR_DIR}" > /dev/null
-        make
+        cmake -B "${TINYCBOR_DIR}/build" -S "${TINYCBOR_DIR}" \
+              -DCMAKE_INSTALL_PREFIX="${TINYCBOR_DIR}/install" \
+              -DCMAKE_INSTALL_LIBDIR=lib \
+              -DBUILD_TESTING=OFF
+        cmake --build "${TINYCBOR_DIR}/build"
+        cmake --install "${TINYCBOR_DIR}/build"
         popd > /dev/null
 
     # Generate the pkg-config file
     cat <<EOF > "${PKGCONFIG_DIR}/tinycbor.pc"
 prefix=${PROJECT_ROOT}
 exec_prefix=\${prefix}
-libdir=\${exec_prefix}/libs/tinycbor-v0.6.0/lib
-includedir=\${prefix}/libs/tinycbor-v0.6.0/src
+libdir=\${exec_prefix}/libs/tinycbor-v${TINYCBOR_VERSION}/install/lib
+includedir=\${prefix}/libs/tinycbor-v${TINYCBOR_VERSION}/install/include/tinycbor
 
 Name: TinyCBOR
 Description: A tiny CBOR encoder and decoder library
-Version: 0.6.0
+Version: ${TINYCBOR_VERSION}
 Libs: -L\${libdir} -ltinycbor
 Cflags: -I\${includedir}
 EOF
@@ -110,7 +115,7 @@ EOF
 #################### libfido2 ####################
 
 build_libfido() {
-    LIBFIDO2_VERSION="1.15.0"
+    LIBFIDO2_VERSION="1.17.0"
     LIBFIDO2_URL="https://developers.yubico.com/libfido2/Releases/libfido2-${LIBFIDO2_VERSION}.tar.gz"
     LIBFIDO2_DIR="${LIBS_DIR}/libfido2-v${LIBFIDO2_VERSION}"
     LIBFIDO2_BUILD_DIR="${LIBFIDO2_DIR}/build"
@@ -150,7 +155,7 @@ EOF
 #################### jansson ####################
 
 build_jansson() {
-    JANSSON_VERSION="2.14"
+    JANSSON_VERSION="2.15.1"
     JANSSON_URL="https://github.com/akheron/jansson/releases/download/v${JANSSON_VERSION}/jansson-${JANSSON_VERSION}.tar.gz"
     JANSSON_DIR="${LIBS_DIR}/jansson-v${JANSSON_VERSION}"
 
@@ -179,12 +184,12 @@ build_jansson() {
         cat <<EOF > "${PKGCONFIG_DIR}/jansson.pc"
 prefix=${PROJECT_ROOT}
 exec_prefix=\${prefix}
-libdir=\${exec_prefix}/libs/jansson-v2.14/src/.libs
-includedir=\${prefix}/libs/jansson-v2.14/src
+libdir=\${exec_prefix}/libs/jansson-v${JANSSON_VERSION}/src/.libs
+includedir=\${prefix}/libs/jansson-v${JANSSON_VERSION}/src
 
 Name: jansson
 Description: C library for encoding, decoding and manipulating JSON data
-Version: 2.14
+Version: ${JANSSON_VERSION}
 Libs: -L\${libdir} -ljansson
 Cflags: -I\${includedir}
 EOF
@@ -194,7 +199,7 @@ EOF
 #################### OpenSSL ####################
 
 build_openssl() {
-    OPENSSL_VERSION="3.2.1"
+    OPENSSL_VERSION="3.6.4"
     OPENSSL_URL="https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"
     OPENSSL_DIR="${LIBS_DIR}/openssl-v${OPENSSL_VERSION}"
 
@@ -213,11 +218,12 @@ build_openssl() {
         make
 
         # Fix the library path for macOS
+        # Use short @rpath names on macOS, because long absolute paths
+        # may exceed the space reserved for Mach-O load commands
         if [ "$(uname)" = "Darwin" ]; then
-            install_name_tool -id "$(pwd)/libssl.3.dylib" "$(pwd)/libssl.3.dylib"
-            install_name_tool -id "$(pwd)/libcrypto.3.dylib" "$(pwd)/libcrypto.3.dylib"
-            install_name_tool -change "/usr/local/lib/libcrypto.3.dylib" \
-                "$(pwd)/libcrypto.3.dylib" "$(pwd)/libssl.3.dylib"
+            install_name_tool -id "@rpath/libssl.3.dylib" "$(pwd)/libssl.3.dylib"
+            install_name_tool -id "@rpath/libcrypto.3.dylib" "$(pwd)/libcrypto.3.dylib"
+            install_name_tool -change "/usr/local/lib/libcrypto.3.dylib" "@rpath/libcrypto.3.dylib" "$(pwd)/libssl.3.dylib"
         fi
         popd > /dev/null
 
@@ -225,12 +231,12 @@ build_openssl() {
     cat <<EOF > "${PKGCONFIG_DIR}/libssl.pc"
 prefix=${PROJECT_ROOT}
 exec_prefix=\${prefix}
-libdir=\${exec_prefix}/libs/openssl-v3.2.1
-includedir=\${prefix}/libs/openssl-v3.2.1/include
+libdir=\${exec_prefix}/libs/openssl-v${OPENSSL_VERSION}
+includedir=\${prefix}/libs/openssl-v${OPENSSL_VERSION}/include
 
 Name: OpenSSL-libssl
 Description: Secure Sockets Layer library
-Version: 3.2.1
+Version: ${OPENSSL_VERSION}
 Requires.private: libcrypto
 Libs: -L\${libdir} -lssl
 Cflags: -I\${includedir}
@@ -239,12 +245,12 @@ EOF
     cat <<EOF > "${PKGCONFIG_DIR}/libcrypto.pc"
 prefix=${PROJECT_ROOT}
 exec_prefix=\${prefix}
-libdir=\${exec_prefix}/libs/openssl-v3.2.1
-includedir=\${prefix}/libs/openssl-v3.2.1/include
+libdir=\${exec_prefix}/libs/openssl-v${OPENSSL_VERSION}
+includedir=\${prefix}/libs/openssl-v${OPENSSL_VERSION}/include
 
 Name: OpenSSL-libcrypto
 Description: OpenSSL cryptography library
-Version: 3.2.1
+Version: ${OPENSSL_VERSION}
 Libs: -L\${libdir} -lcrypto
 Cflags: -I\${includedir}
 EOF
