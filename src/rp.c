@@ -661,6 +661,18 @@ int verify_authdata(struct rp_data *data, struct authdata *authdata,
     // set");
     return 0;
 }
+//function for deriviation of the aes-256-gcm key
+static int derive_gcm_key(struct rp_data *data, const u8 *eph_user_id, size_t eph_user_id_len, u8 **gcm_key, unsigned int *gcm_key_length){
+    *gcm_key = OPENSSL_zalloc(32);
+    if(*gcm_key == NULL){
+        debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation failed");
+        return -1;
+    }
+    if(HMAC(EVP_sha256(), data->k_ep, data->k_ep_len, eph_user_id, eph_user_id_len, *gcm_key, gcm_key_length)==NULL){
+        return -1;
+    }
+    return 0;
+}
 
 int create_pre_response(struct rp_data *data, const u8 **out,
                            size_t *out_len) {
@@ -674,29 +686,22 @@ int create_pre_response(struct rp_data *data, const u8 **out,
     debug_printf(DEBUG_LEVEL_MORE_VERBOSE,
                  "Created an ephemeral user id from random bytes");
     // RP ID derives AES-256-GCM from ephemeral user id using HMAC-SHA256
-    size_t gcm_key_len = 32;
-    u8 *gcm_key = OPENSSL_zalloc(gcm_key_len);
-    if(gcm_key == NULL){
-        debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation failed");
+    u8 *gcm_key = NULL;
+    unsigned int gcm_key_len = 0;
+    if(derive_gcm_key(data, eph_user_id, data->eph_user_id_len, &gcm_key, &gcm_key_len)!=0){
+        debug_printf(DEBUG_LEVEL_ERROR, "Deriving the gcm key failed");
         return -1;
     }
-    unsigned int md_len = 0;
-    HMAC(EVP_sha256(), data->k_ep, data->k_ep_len, eph_user_id, data->eph_user_id_len, gcm_key, &md_len);
     debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE,
-                 "Derived AES-256-GCM key from ephemeral user id with HMAC-SHA256: ", gcm_key, md_len );
+                 "Derived AES-256-GCM key from ephemeral user id with HMAC-SHA256: ", gcm_key, gcm_key_len );
 
-    //extra checking whether the size of resulting HMAC is 32 bytes
-    if(md_len != 32){
-        debug_printf(DEBUG_LEVEL_ERROR, "The length of HMAC output is not the extpected 32 bytes");
-        return -1;
-    }
     // Prepare the response packet
     struct pre_response packet;
     memset(&packet, 0, sizeof(struct pre_response));
     packet.eph_user_id = eph_user_id;
     packet.eph_user_id_len = data->eph_user_id_len;
     packet.gcm_key = gcm_key;
-    packet.gcm_key_len = md_len;
+    packet.gcm_key_len = gcm_key_len;
 
 
     int result = cbor_build(&packet, PKT_PRE_RESPONSE, out, out_len);
@@ -824,9 +829,19 @@ int create_reg_request(struct rp_data *data, const u8 **out,
         return -1;
     }
 
+    size_t iv_len = 12;
+    u8 *iv = OPENSSL_zalloc(iv_len);
+    if(iv == NULL){
+        debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation for iv failed");
+        return -1;
+    }
+    if(get_message_iv(PKT_REG_REQUEST, iv, iv_len)!=0){
+        debug_printf(DEBUG_LEVEL_ERROR, "Deriving the iv failed");
+        return -1;
+    }
     u8 *ciphertext_out = NULL;
     size_t ciphertext_out_len = 0;
-    if(aes_gcm_encrypt(inner_cbor_out, inner_cbor_out_len, &ciphertext_out, &ciphertext_out_len, data->gcm_key, data->gcm_key_len)){
+    if(aes_gcm_encrypt(inner_cbor_out, inner_cbor_out_len, &ciphertext_out, &ciphertext_out_len, data->gcm_key, data->gcm_key_len, iv, iv_len)){
         debug_printf(DEBUG_LEVEL_ERROR, "Failed encrypting the CBOR array");
         return -1;
     }
@@ -919,22 +934,32 @@ int process_indication(const u8 *in, size_t in_len, struct rp_data *data) {
             OPENSSL_free(packet.encrypted_data);
             return -1;
         }
-    //Derive the gcm key from provided ephemeral user id
-    data->gcm_key = OPENSSL_zalloc(32);
-    unsigned int md_len = 0;
-    HMAC(EVP_sha256(), data->k_ep, data->k_ep_len, packet.eph_user_id, packet.eph_user_id_len, data->gcm_key, &md_len);
-    debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE, "The derived key after the start of the registartion is ", data->gcm_key, md_len);
-    if(md_len != 32){
-        debug_printf(DEBUG_LEVEL_ERROR, "The size of a derived gcm key is not 32");
+    u8 *gcm_key = NULL;
+    unsigned int gcm_key_len = 0;
+    if(derive_gcm_key(data, packet.eph_user_id, packet.eph_user_id_len, &gcm_key, &gcm_key_len)!=0){
+        debug_printf(DEBUG_LEVEL_ERROR, "Deriving the gcm key failed");
         return -1;
     }
-    data->gcm_key_len = md_len;
+    data->gcm_key = gcm_key;
+    data->gcm_key_len = gcm_key_len;
+
+
+    size_t iv_len = 12;
+    u8 *iv = OPENSSL_zalloc(iv_len);
+    if(iv == NULL){
+        debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation for iv failed");
+        return -1;
+    }
+    if(get_message_iv(PKT_REG_INDICATION, iv, iv_len)!=0){
+        debug_printf(DEBUG_LEVEL_ERROR, "Deriving the iv failed");
+        return -1;
+    }
 
     u8 *cbor_array_decrypted = NULL;
     size_t cbor_array_decrypted_len = 0;
     if (aes_gcm_decrypt(packet.encrypted_data, packet.encrypted_data_len,
                         &cbor_array_decrypted, &cbor_array_decrypted_len, data->gcm_key,
-                        data->gcm_key_len) != 0) {
+                        data->gcm_key_len, iv, iv_len) != 0) {
         debug_printf(DEBUG_LEVEL_ERROR, "Failed to decrypt CBOR array");
         OPENSSL_free(packet.eph_user_id);
         OPENSSL_free(packet.encrypted_data);

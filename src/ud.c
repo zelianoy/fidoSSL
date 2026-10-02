@@ -732,9 +732,19 @@ int create_reg_indication(struct ud_data *data, const u8 **out, size_t *out_len)
         goto err;
     }
 
+    size_t iv_len = 12;
+    u8 *iv = OPENSSL_zalloc(iv_len);
+    if(iv == NULL){
+        debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation for iv failed");
+        return -1;
+    }
+    if(get_message_iv(PKT_REG_INDICATION, iv, iv_len)!=0){
+        debug_printf(DEBUG_LEVEL_ERROR, "Deriving the iv failed");
+        return -1;
+    }
 
     if(aes_gcm_encrypt(inner_cbor_out, inner_cbor_out_len,
-        &ciphertext_out, &ciphertext_out_len, data->gcm_key, data->gcm_key_len) != 0){
+        &ciphertext_out, &ciphertext_out_len, data->gcm_key, data->gcm_key_len, iv, iv_len) != 0){
         debug_printf(DEBUG_LEVEL_ERROR, "Failed to aes-gcm encrypt the cbor array");
         goto err;
     }
@@ -757,12 +767,6 @@ int create_reg_indication(struct ud_data *data, const u8 **out, size_t *out_len)
        return -1;    
 }
 
-
-
-
-
-
-//TODO
 int create_reg_response(struct ud_data *data, SSL *ssl, const u8 **out,
                         size_t *out_len) {
     // Update ud_data with the origin
@@ -918,24 +922,31 @@ int process_pre_response(const u8 *in, size_t in_len,
 
     assert(data->gcm_key != NULL);
     assert(data->gcm_key_len == 32);
-   //TODO: Asserts durch Laufzeitprüfungen ersertzen
 
+    size_t iv_len = 12;
+    u8 *iv = OPENSSL_zalloc(iv_len);
+    if(iv == NULL){
+        debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation for iv failed");
+        return -1;
+    }
+    if(get_message_iv(PKT_REG_REQUEST, iv, iv_len)!=0){
+        debug_printf(DEBUG_LEVEL_ERROR, "Deriving the iv failed");
+        return -1;
+    }
 
     u8 *cbor_array_decrypted;
     size_t cbor_array_decrypted_len;
     struct reg_request_encrypted_data encrypted_data = {0};
 
     if (aes_gcm_decrypt(packet.encrypted_data, packet.encrypted_data_len, &cbor_array_decrypted,
-                       &cbor_array_decrypted_len, data->gcm_key, data->gcm_key_len)!=0){
+                       &cbor_array_decrypted_len, data->gcm_key, data->gcm_key_len, iv, iv_len)!=0){
         debug_printf(DEBUG_LEVEL_ERROR, "Failed to decrypt CBOR array");
         return -1;
     }
-    
     if(cbor_parse_reg_request_encrypted_data(cbor_array_decrypted, cbor_array_decrypted_len, &encrypted_data)!=0){
-        debug_printf(DEBUG_LEVEL_ERROR, "Parsing the CBOR array failed" );
+        debug_printf(DEBUG_LEVEL_ERROR, "Parsing the CBOR array failed");
         return -1;
-    }        
-    
+    }
     char *unpadded_user_name = OPENSSL_malloc(257 * sizeof(*unpadded_user_name));
     size_t unpadded_user_name_len = 0;
 

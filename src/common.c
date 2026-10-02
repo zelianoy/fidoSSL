@@ -4,7 +4,7 @@
 #include <jansson.h>
 #include "debug.h"
 #include <fido/es256.h>
-
+#include "assert.h"
 const char* get_ssl_ext_context_code(unsigned int context) {
     switch (context) {
         case SSL_EXT_TLS_ONLY: return "SSL_EXT_TLS_ONLY";
@@ -65,18 +65,15 @@ int sha256_hash(const u8 *in, size_t inlen, u8 **out, size_t *outlen) {
     return 0;
 }
 
-int aes_gcm_encrypt(const u8 *plain, size_t plain_len, u8 **cypher, size_t *cypher_len, const u8 *key, size_t key_len) {
+int aes_gcm_encrypt(const u8 *plain, size_t plain_len, u8 **cypher, size_t *cypher_len, const u8 *key, size_t key_len, const u8 *iv, size_t iv_len) {
     EVP_CIPHER_CTX *ctx;
     int len = 0;
     int ciphertext_len = 0;
-    // The iv has to be freshly generated for every encryption, since we have more than one encrypted object
+    // The iv has to be unique for every encryption, since we have more than one encrypted object
+    // This implementation derives the iv deterministically from a message type that the encryption is used in
     // Needs to be 12 Bytes long
     //TODO: unified error cleanup path
 
-    //the encryption format is 12-byte iv || ciphertext || 16-byte tag
-    u8 *iv = 0;
-    size_t iv_len = 12;
-    if(create_random_bytes(iv_len, &iv)!=0) return -1;
 
     u8 tag[16]; // GCM Tag
     size_t tag_len = 16;
@@ -87,16 +84,12 @@ int aes_gcm_encrypt(const u8 *plain, size_t plain_len, u8 **cypher, size_t *cyph
         return -1;
     }
 
-    // Allocate memory for iv (12 bytes) and cypher text and 16 bytes extra for GCM tag
-    *cypher = (u8 *)malloc(plain_len + tag_len + iv_len);
+    // Allocate memory cypher text and 16 bytes extra for GCM tag
+    *cypher = (u8 *)malloc(plain_len + tag_len);
     if (*cypher == NULL){
         printf("Memory allocation failed.\n");
         return -1;
     }
-    // Append the iv to the begining of the cipher text
-    memcpy(*cypher, iv, iv_len);
-    ciphertext_len += iv_len;
-
     // Create and initialize the context
     if(!(ctx = EVP_CIPHER_CTX_new())) return -1;
 
@@ -114,7 +107,7 @@ int aes_gcm_encrypt(const u8 *plain, size_t plain_len, u8 **cypher, size_t *cyph
 
     // Provide the message to be encrypted, and obtain the encrypted output.
     // EVP_EncryptUpdate can be called multiple times if necessary
-    if(1 != EVP_EncryptUpdate(ctx, *cypher + iv_len, &len, plain, plain_len))
+    if(1 != EVP_EncryptUpdate(ctx, *cypher, &len, plain, plain_len))
         return -1;
     ciphertext_len += len;
 
@@ -135,22 +128,15 @@ int aes_gcm_encrypt(const u8 *plain, size_t plain_len, u8 **cypher, size_t *cyph
 
     // Clean up
     EVP_CIPHER_CTX_free(ctx);
-    OPENSSL_free(iv);
 
     *cypher_len = ciphertext_len;
     return 0;
 }
 
-int aes_gcm_decrypt(const u8 *cypher, size_t cypher_len, u8 **plain, size_t *plain_len, const u8 *key, size_t key_len) {
+int aes_gcm_decrypt(const u8 *cypher, size_t cypher_len, u8 **plain, size_t *plain_len, const u8 *key, size_t key_len, const u8 *iv, size_t iv_len) {
     EVP_CIPHER_CTX *ctx;
     int len = 0;
     int ret = -1;
-
-    // The iv is extracted from first 12 bytes of cyphertext
-    u8 iv[12];
-    memcpy(iv, cypher, 12);
-
-
     u8 tag[16];
 
     // Check key length for validity
@@ -162,8 +148,7 @@ int aes_gcm_decrypt(const u8 *cypher, size_t cypher_len, u8 **plain, size_t *pla
     // Extract the tag from the end of the cypher
     memcpy(tag, cypher + cypher_len - 16, 16);
 
-    // Adjust cypher_len to exclude the iv
-    cypher_len -= 12;
+
     // Adjust cypher_len to exclude the tag 
     cypher_len -= 16;
 
@@ -183,7 +168,7 @@ int aes_gcm_decrypt(const u8 *cypher, size_t cypher_len, u8 **plain, size_t *pla
         goto cleanup;
 
     // Set IV length. Not necessary if default 12 bytes is used
-    if (!EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, NULL))
+    if (!EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, iv_len, NULL))
         goto cleanup;
 
     // Initialize key and IV
@@ -191,7 +176,7 @@ int aes_gcm_decrypt(const u8 *cypher, size_t cypher_len, u8 **plain, size_t *pla
         goto cleanup;
 
     // Provide the message to be decrypted
-    if (!EVP_DecryptUpdate(ctx, *plain, &len, cypher + 12, cypher_len))
+    if (!EVP_DecryptUpdate(ctx, *plain, &len, cypher, cypher_len))
         goto cleanup;
     *plain_len = len;
 
@@ -395,4 +380,22 @@ int remove_bit_padding(char *unpadded_data, const u8 *padded_data, size_t *unpad
     return -1;
 }
 
-
+int get_message_iv(enum packet_type type, u8 *iv, size_t iv_len){
+    assert(iv != NULL && type != UNDEFINED && iv_len == 12);
+    switch(type){
+        case PKT_REG_INDICATION:
+            memcpy(iv, "messagetype3", iv_len);
+            break;
+        case PKT_REG_REQUEST:
+            memcpy(iv, "messagetype4", iv_len);
+            break;
+        default:
+            debug_printf(DEBUG_LEVEL_ERROR, "Enryption is not used for this message type");
+            return -1;
+        //case PKT_AUTH_IDENT_SERVER_SIDE:
+        //.   memcpy(iv, "messagetype7", FIDOSSL_GCM_IV_LEN);
+        //.   break
+        //
+    }
+    return 0;
+}
