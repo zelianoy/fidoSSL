@@ -66,7 +66,10 @@
 
 - added option to use SSLKEYLOGFILE to log SSL session keys
 - updated the dummy tls certificate
-- IV is now freshly generated for every encryption
 - corrected encryption and decryption functions
 - limited the user name and user display name to 255 bytes. This preserves one byte for the 0x80 delimiter and enables unambiguous removal of the padding
-- updated the dummy tls certificate to use the RFC 5280-compliant serial number '0x01' and added its mathing all zero-E25519 test key
+- updated the dummy tls certificate to use the RFC 5280-compliant serial number '0x01' and added its matching all zero-Ed25519 test key
+- updated dependencies to SQLite 3.53.4, TinyCBOR 7.0, libfido 1.17.0, Jansson 2.15.1 and OpenSSL 3.6.4
+- migrated the TinyCBOR from Make to CMake
+- changed the macOS OpenSSL install names to use '@rpath'
+- IV is deterministically derived from the message type
