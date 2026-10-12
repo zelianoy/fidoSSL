@@ -36,7 +36,7 @@
 - changed the length of user ID from 16 to 64 bytes
 - public key credential parameters are now arrays, which contain credential type and COSE algorithm, though only the ES256 is currently supported
 - created an inner encrypted data CBOR array, which contains padded user name, padded user display name, 64-byte user ID and optional excluded credentials into an inner CBOR array
-- added serialization and parsing of excluded credebtials descriptors
+- added serialization and parsing of excluded credentials descriptors
 - added AES-256-GCM encryption and decryption of the encrypted data
 - moved timeout, authenticator selection criteria, attestation preference and extensions to the optional parameters map
 - the AES-GCM-KEY is now derived from ephemeral user id
@@ -46,21 +46,39 @@
 - message type is now 5
 - now the authenticator creates an attestation object, which contains authenticator data and attestation statement. The Relying Party cryptographically validates the attestation statement, using the certificate supplied by authenticator. The certificate trust chain is not validated.
 
-### Authentication Indication
+### Authentication Indication (discoverable credential)
 
 - message type is now 6
 
+### Authentication Indication (server-side credential)
+
+- added a new message type for authentication with server-side credentials
+- message type is 7
+- message contains ephemeral user id, which is established in a Pre Handshake 
+- message contains the user name, which is padded and encrypted with AES-256-GCM
+
 ### Authentication Request
 
-- message type is now 7
+- message type is now 8
+- CBOR map called optionals now contains a list of credentials acceptable to the caller. This list is encrypted, MUST be present when server-side credentials are used and MUST NOT be present when discoverable credentials are used
+- CBOR map contains now additional parameters called extensions
+- added CBOR serialisation and parsing of allowed credential descriptors
+- we now filter credential descriptors by user ID and RP ID
+- the allowed credential IDs are passed to authenticator with fido_assert_allow_cred() 
+- saved the allow list on server side for response verification
 
 ### Authentication Response
 
-- message type is now 8
+- message type is now 9
 - user handle is now part of a CBOR map called optionals with key 1
 - Selected Credential ID is now part of a CBOR map called optionals with key 2
-- both User Handle and Selected Credential ID are not actually optional, as only 
-  discoverable credentials can be used as of now
+- required a User Handle only for discoverable credentials, when server-side credentials are used, the user handle can be omitted
+- checked the provided user handle against the expected user id in server-side authentication
+- rejected credential IDs that are not included in the requests allow list
+- required User Presence flag during server-side assertion verification
+- checked that the stored credential belongs to the current RP ID
+- we still include an additional credential ID, which does not align with the draft's response format
+
 
 ## Other Changes
 
@@ -73,3 +91,5 @@
 - migrated the TinyCBOR from Make to CMake
 - changed the macOS OpenSSL install names to use '@rpath'
 - IV is deterministically derived from the message type
+- added separate client modes and state-machine paths for discoverable and server-side authentication
+- removed trailing padding characters from Base64URL encoding and restored missing padding before decoding

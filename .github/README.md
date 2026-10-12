@@ -140,7 +140,7 @@ if (opts == NULL) {
     // Handle malloc error
 }
 
-// Modes are: FIDOSSL_REGISTER or FIDOSSL_AUTHENTICATE
+// Modes are: FIDOSSL_REGISTER, FIDOSSL_AUTHENTICATE_DISCOVERABLE OR FIDOSSL_AUTHENTICATE_SERVER_SIDE
 opts->mode = FIDOSSL_REGISTER;
 
 // Define a user and user display name.
