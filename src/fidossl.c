@@ -45,23 +45,52 @@ int fidossl_client_add_cb(
             }
             data->state = STATE_PRE_INDICATION_SENT;
             break;
+        // After the PreHandshake the Client starts either the registartion or the authentication with server-side credentials
         case STATE_PRE_RESPONSE_RECEIVED:
-            if (create_reg_indication(data, out, outlen) != 0) {
-                debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to create registration indication");
+            if (data->ceremony == REGISTRATION_CEREMONY) {
+                if (create_reg_indication(data, out, outlen) != 0) {
+                    debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to create registration indication");
+                    ERR_put_error(ERR_LIB_USER, 0, SSL_AD_INTERNAL_ERROR, __FILE__, __LINE__);
+                    *al = SSL_AD_INTERNAL_ERROR;
+                    return -1;
+                }
+                data->state = STATE_REG_INDICATION_SENT;
+                break;
+            }
+            else if (data->ceremony == AUTHENTICATION_SERVER_SIDE_CRED_CEREMONY) {
+                if (create_auth_indication_server_side(data, out, outlen) != 0) {
+                    debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to create authentication indication with server-side credentials");
+                    ERR_put_error(ERR_LIB_USER, 0, SSL_AD_INTERNAL_ERROR, __FILE__, __LINE__);
+                    *al = SSL_AD_INTERNAL_ERROR;
+                    return -1;
+                }
+                data->state = STATE_AUTH_INDICATION_SERVER_SIDE_SENT;
+                break;
+            }
+            else {
+                debug_printf(DEBUG_LEVEL_ERROR, "This state does not require double handshake");
                 ERR_put_error(ERR_LIB_USER, 0, SSL_AD_INTERNAL_ERROR, __FILE__, __LINE__);
                 *al = SSL_AD_INTERNAL_ERROR;
                 return -1;
             }
-            data->state = STATE_REG_INDICATION_SENT;
-            break;
-        case STATE_AUTH_INITIAL:
-            if (create_auth_indication(data, out, outlen) != 0) {
-                debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to create authentication indication");
+        // After discoverable credentials wird keine Benutzeridentität übermittelt, daher ist kein PreHandshake zur Erteilung eines AES-GCM-Schlüssels erforderlich     
+        case STATE_AUTH_INITIAL_DISCOVERABLE:
+            if (create_auth_indication_discoverable(data, out, outlen) != 0) {
+                debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to create authentication indication with discoverable creds");
                 ERR_put_error(ERR_LIB_USER, 0, SSL_AD_INTERNAL_ERROR, __FILE__, __LINE__);
                 *al = SSL_AD_INTERNAL_ERROR;
                 return -1;
             }
-            data->state = STATE_AUTH_INDICATION_SENT;
+            data->state = STATE_AUTH_INDICATION_DISCOVERABLE_SENT;
+            break; 
+        case STATE_AUTH_INITIAL_SERVER_SIDE:
+            if (create_pre_indication(data, out, outlen) != 0) {
+                debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to create authentication indication with serverside creds");
+                ERR_put_error(ERR_LIB_USER, 0, SSL_AD_INTERNAL_ERROR, __FILE__, __LINE__);
+                *al = SSL_AD_INTERNAL_ERROR;
+                return -1;
+            }
+            data->state = STATE_PRE_INDICATION_SENT;
             break;
         default:
             debug_printf(DEBUG_LEVEL_ERROR, "Invalid state");
@@ -150,7 +179,16 @@ int fidossl_client_parse_cb(
                 }
                 data->state = STATE_REG_REQUEST_RECEIVED;
                 break;
-            case STATE_AUTH_INDICATION_SENT:
+            case STATE_AUTH_INDICATION_DISCOVERABLE_SENT:
+                if (process_auth_request(in, inlen, data) != 0) {
+                    debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to process authentication request");
+                    ERR_put_error(ERR_LIB_USER, 0, SSL_AD_ACCESS_DENIED, __FILE__, __LINE__);
+                    *al = SSL_AD_ACCESS_DENIED;
+                    return -1;
+                }
+                data->state = STATE_AUTH_REQUEST_RECEIVED;
+                break;
+            case STATE_AUTH_INDICATION_SERVER_SIDE_SENT:
                 if (process_auth_request(in, inlen, data) != 0) {
                     debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to process authentication request");
                     ERR_put_error(ERR_LIB_USER, 0, SSL_AD_ACCESS_DENIED, __FILE__, __LINE__);
@@ -216,7 +254,7 @@ int fidossl_server_add_cb(
                 }
                 data->state = STATE_REG_REQUEST_SENT;
                 break;
-            case STATE_AUTH_INDICATION_RECEIVED:
+            case STATE_AUTH_INDICATION_DISCOVERABLE_RECEIVED:
                 if (create_auth_request(data, out, outlen) != 0) {
                     debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to create authentication request");
                     ERR_put_error(ERR_LIB_USER, 0, SSL_AD_ACCESS_DENIED, __FILE__, __LINE__);
@@ -225,6 +263,15 @@ int fidossl_server_add_cb(
                 }
                 data->state = STATE_AUTH_REQUEST_SENT;
                 break;
+            case STATE_AUTH_INDICATION_SERVER_SIDE_RECEIVED:
+                if (create_auth_request(data, out, outlen) != 0) {
+                    debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to create authentication request");
+                    ERR_put_error(ERR_LIB_USER, 0, SSL_AD_ACCESS_DENIED, __FILE__, __LINE__);
+                    *al = SSL_AD_ACCESS_DENIED;
+                    return -1;
+                }
+                data->state = STATE_AUTH_REQUEST_SENT;
+                break; 
             default:
                 debug_printf(DEBUG_LEVEL_ERROR, "Invalid state");
                 ERR_put_error(ERR_LIB_USER, 0, SSL_AD_INTERNAL_ERROR, __FILE__, __LINE__);
@@ -258,8 +305,8 @@ int fidossl_server_parse_cb(
     }
     if (context == SSL_EXT_CLIENT_HELLO) {
         struct rp_data *data = get_rp_data(ssl, parse_arg);
-        // The server has no state yet and can accept any indication. The
-        // process_inication function will set the state accordingly.
+        // process_indication bestimmt zunächst den Nachrichtentyp mittels einer Hilfsfunktion
+        // Registrtierung und Authntifizierung mit den Discoverabale Credentials dürfen nur nach einer PreResponse verarbeitet werden
         if (process_indication(in, inlen, data) != 0) {
             debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to parse FIDO indication");
             ERR_put_error(ERR_LIB_USER, 0, SSL_AD_ACCESS_DENIED, __FILE__, __LINE__);
@@ -274,6 +321,7 @@ int fidossl_server_parse_cb(
                     debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to parse registration response");
                     ERR_put_error(ERR_LIB_USER, 0, SSL_AD_ACCESS_DENIED, __FILE__, __LINE__);
                     *al = SSL_AD_ACCESS_DENIED;
+                    data->state = STATE_REG_FAILURE;
                     return -1;
                 }
                 data->state = STATE_REG_SUCCESS;
@@ -284,8 +332,10 @@ int fidossl_server_parse_cb(
                     debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to parse authenticaton response");
                     ERR_put_error(ERR_LIB_USER, 0, SSL_AD_ACCESS_DENIED, __FILE__, __LINE__);
                     *al = SSL_AD_ACCESS_DENIED;
+                    data->state = STATE_AUTH_FAILURE;
                     return -1;
                 }
+                data->state = STATE_AUTH_SUCCESS;
                 debug_printf(DEBUG_LEVEL_VERBOSE, "FIDO authentication success!");
                 break;
             default:
@@ -303,7 +353,7 @@ int fidossl_server_parse_cb(
 }
 
 int no_verify_cb(int preverify_ok, X509_STORE_CTX *x509_ctx) {
-    // Don't validae the client certificate.
+    // Don't validate the client certificate.
     // The client certificate request is necessary to trigger the fido extension
     // but fido authentication replaces the client certificate authentication.
     return 1;

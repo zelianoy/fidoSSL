@@ -175,11 +175,10 @@ int update_sign_count(sqlite3 *db, const u8 *cred_id, size_t cred_id_len,
     sqlite3_finalize(stmt);
     return 0;
 }
-//TODO: Anpassung der Name von Funktion zu get_excluded_credentials
-int get_excluded_credential_descriptors(sqlite3 *db, const u8 *user_id, size_t user_id_len,
+int get_credential_descriptors(sqlite3 *db, const u8 *user_id, size_t user_id_len, const char *rp_id,
                             struct public_key_credential_descriptor **creds, size_t *creds_len) {
     const char *sql = "SELECT cred_id, type, transports "
-                      "FROM credentials WHERE user_id == ?";
+                      "FROM credentials WHERE user_id == ? AND rp_id = ?";
     sqlite3_stmt *stmt;
     int rc;
 
@@ -191,6 +190,8 @@ int get_excluded_credential_descriptors(sqlite3 *db, const u8 *user_id, size_t u
         return -1;
 
     sqlite3_bind_blob(stmt, 1, user_id, user_id_len, SQLITE_STATIC);
+    
+    sqlite3_bind_text(stmt, 2, rp_id, -1,  SQLITE_STATIC);
 
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         *creds = realloc(*creds, (*creds_len + 1) * sizeof(struct public_key_credential_descriptor));

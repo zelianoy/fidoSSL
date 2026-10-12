@@ -12,6 +12,11 @@ void free_rp_data(struct rp_data *rp_data) {
     OPENSSL_clear_free(rp_data->gcm_key, rp_data->gcm_key_len);
     OPENSSL_free(rp_data->ticket);
     OPENSSL_clear_free(rp_data->k_ep, rp_data->k_ep_len);
+    if(rp_data->allow_credentials_len!=0 && rp_data->allow_credentials!=NULL) {
+        for(size_t i = 0; i < rp_data->allow_credentials_len;i++) {
+            OPENSSL_free(rp_data->allow_credentials[i].id);
+        }
+    }
     OPENSSL_free(rp_data);
 }
 
@@ -59,7 +64,7 @@ void free_auth_response(struct auth_response *auth_response) {
     OPENSSL_free(auth_response->authdata);
     OPENSSL_free(auth_response->clientdata_json);
     OPENSSL_free(auth_response->signature);
-    OPENSSL_free(auth_response->user_id);
+    OPENSSL_free(auth_response->user_handle);
     OPENSSL_free(auth_response);
 }
 

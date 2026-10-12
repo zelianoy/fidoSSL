@@ -39,7 +39,7 @@ struct ud_data *init_ud(SSL *ssl, void *add_arg) {
     debug_initialize();
     set_debug_level(opts->debug_level);
 
-    if (opts->mode != FIDOSSL_REGISTER && opts->mode != FIDOSSL_AUTHENTICATE) {
+    if (opts->mode != FIDOSSL_REGISTER && opts->mode != FIDOSSL_AUTHENTICATE_SERVER_SIDE  && opts->mode != FIDOSSL_AUTHENTICATE_DISCOVERABLE) {
         debug_printf(DEBUG_LEVEL_ERROR,
                      "FIDOSSL: Invalid mode in client options");
         return NULL;
@@ -62,8 +62,10 @@ struct ud_data *init_ud(SSL *ssl, void *add_arg) {
 
     debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Configuring Client:");
 
+    
     // Fill the user device data with the client options
     if (opts->mode == FIDOSSL_REGISTER) {
+        data->ceremony = REGISTRATION_CEREMONY;
         debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    Mode: Key enrollment");
         data->state = STATE_REG_INITIAL;
         if (decode_base64(opts->ticket_b64, &data->ticket, &data->ticket_len) !=
@@ -73,15 +75,23 @@ struct ud_data *init_ud(SSL *ssl, void *add_arg) {
             return NULL;
         }
 
+
     data->user_name = NULL;
     data->user_display_name =
             OPENSSL_zalloc(strlen(opts->user_display_name) + 1);
     memcpy(data->user_display_name, opts->user_display_name, strlen(opts->user_display_name));
     debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    User display name: %s", data->user_display_name);
 
-    } else if (opts->mode == FIDOSSL_AUTHENTICATE) {
-        debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    Mode: Authentication");
-        data->state = STATE_AUTH_INITIAL;
+    } else if (opts->mode == FIDOSSL_AUTHENTICATE_DISCOVERABLE) {
+        debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    Mode: Authentication with discoverable credentials");
+        data->ceremony = AUTHENTICATION_DISCOVERABLE_CEREMONY;
+        data->state = STATE_AUTH_INITIAL_DISCOVERABLE;
+    } else if (opts->mode == FIDOSSL_AUTHENTICATE_SERVER_SIDE) {
+        data->ceremony = AUTHENTICATION_SERVER_SIDE_CRED_CEREMONY;
+        debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    Mode: Authentication with server-side credentials");
+        data->state = STATE_AUTH_INITIAL_SERVER_SIDE;
+        data->user_name = OPENSSL_strdup(opts->user_name);
+        
     }
 
     // TODO: how to configure this from rp side?
@@ -460,6 +470,20 @@ fido_assert_t *create_fido_assert_t(struct ud_data *data) {
         debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    User presence: %s",
                      up == FIDO_OPT_TRUE ? "TRUE" : "FALSE");
     }
+    if(data->ceremony == AUTHENTICATION_SERVER_SIDE_CRED_CEREMONY) {
+        if(data->allow_credentials_len < 1) {
+            return NULL;
+        }
+        for(int i = 0; i < data->allow_credentials_len; i++){
+            if(fido_assert_allow_cred(assert_t, data->allow_credentials[i].id,data->allow_credentials[i].id_len) != FIDO_OK){
+                debug_printf(DEBUG_LEVEL_ERROR, "Failed to set the allowed credential");
+                fido_assert_free(&assert_t);
+                return NULL;
+            }
+            debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE, "    Allowed Credential ID:", 
+                            data->allow_credentials[i].id, data->allow_credentials[i].id_len);
+        }
+    }
 
     return assert_t;
 }
@@ -630,24 +654,41 @@ int run_ctap(struct ud_data *data, enum fido_mode mode) {
         data->signature = OPENSSL_malloc(data->signature_len);
         memcpy(data->signature, fido_assert_sig_ptr(assert_t, 0),
                data->signature_len);
-
         data->user_id_len = fido_assert_user_id_len(assert_t, 0);
-        data->user_id = OPENSSL_malloc(data->user_id_len);
-        memcpy(data->user_id, fido_assert_user_id_ptr(assert_t, 0),
-               data->user_id_len);
-
+        if(data->ceremony == AUTHENTICATION_DISCOVERABLE_CEREMONY){
+            if (data->user_id_len == 64) {
+                data->user_id = OPENSSL_malloc(data->user_id_len);
+                memcpy(data->user_id, fido_assert_user_id_ptr(assert_t, 0), data->user_id_len);
+            }
+            else {
+                debug_printf(DEBUG_LEVEL_ERROR, "The user handle has a wrong length");
+                success = false;
+            }
+        }
+        else if(data->ceremony == AUTHENTICATION_SERVER_SIDE_CRED_CEREMONY){
+            if (data->user_id_len == 64) {
+                data->user_id = OPENSSL_malloc(data->user_id_len);
+                memcpy(data->user_id, fido_assert_user_id_ptr(assert_t, 0), data->user_id_len);
+            }
+            else if (data->user_id_len == 0) {
+                data->user_id = NULL;        
+            }
+            else {
+                debug_printf(DEBUG_LEVEL_ERROR, "The user handle has not allowed size");
+                success = false;
+            }
+        }
         data->cred_id_len = fido_assert_id_len(assert_t, 0);
         data->cred_id = OPENSSL_malloc(data->cred_id_len);
         memcpy(data->cred_id, fido_assert_id_ptr(assert_t, 0),
                data->cred_id_len);
 
         if (!data->authdata || !data->authdata_len || !data->signature ||
-            !data->signature_len || !data->user_id || !data->user_id_len ||
-            !data->cred_id || !data->cred_id_len) {
+            !data->signature_len || !data->cred_id || !data->cred_id_len) {
             debug_printf(
                 DEBUG_LEVEL_ERROR,
                 "CTAP failed to return all necessary data, this is unusual");
-            success = -1;
+            success = false;
         }
     }
     fido_cred_free(&cred_t);
@@ -816,12 +857,58 @@ int create_reg_response(struct ud_data *data, SSL *ssl, const u8 **out,
     return cbor_build(&packet, PKT_REG_RESPONSE, out, out_len);
 }
 
-int create_auth_indication(struct ud_data *data, const u8 **out,
+int create_auth_indication_discoverable(struct ud_data *data, const u8 **out,
                            size_t *out_len) {
     // The FIDO standard speficifies that the authentication process is started
     // by the REST api call: 'webauthn/authenticate-begin'. In TLS context, we
     // indicate the start of the authentication by the packet type.
-    return cbor_build(NULL, PKT_AUTH_INDICATION, out, out_len);
+    return cbor_build(NULL, PKT_AUTH_INDICATION_DISCOVERABLE, out, out_len);
+}
+
+int create_auth_indication_server_side(struct ud_data *data, const u8 **out,
+                           size_t *out_len) {
+    size_t iv_len = 12;
+    u8 *iv = OPENSSL_zalloc(iv_len);
+    if(iv == NULL){
+        debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation for iv failed");
+        return -1;
+    }
+
+    size_t encrypted_user_name_len = 0;
+    u8 *encrypted_user_name = NULL;
+    
+    size_t padded_user_name_len = 256;
+    u8 *padded_user_name = OPENSSL_zalloc(padded_user_name_len);
+    if(padded_user_name == NULL){
+        debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation for padded user name failed");
+        return -1;
+    }
+
+    if(bit_padding(padded_user_name, data->user_name, 
+        strlen(data->user_name)) != 0){
+        debug_printf(DEBUG_LEVEL_ERROR, "Failed to pad user name");
+        return -1;     
+    }
+
+    if(get_message_iv(PKT_AUTH_INDICATION_SERVER_SIDE, iv, iv_len)!=0){
+        debug_printf(DEBUG_LEVEL_ERROR, "Deriving the iv failed");
+        return -1;
+    }
+
+    if(aes_gcm_encrypt(padded_user_name, padded_user_name_len,
+        &encrypted_user_name, &encrypted_user_name_len, data->gcm_key, data->gcm_key_len, iv, iv_len) != 0){
+        debug_printf(DEBUG_LEVEL_ERROR, "Failed to aes-gcm encrypt the user name");
+        return -1;
+    }
+
+    struct auth_indication_server_side packet = {0};
+    packet.encrypted_user_name = encrypted_user_name;
+    packet.encrypted_user_name_len = encrypted_user_name_len;
+    packet.eph_user_id = data->eph_user_id;
+    packet.eph_user_id_len = data->eph_user_id_len;
+
+    return cbor_build(&packet, PKT_AUTH_INDICATION_SERVER_SIDE, out, out_len);
+
 }
 
 int create_auth_response(struct ud_data *data, SSL *ssl, const u8 **out,
@@ -855,6 +942,7 @@ int create_auth_response(struct ud_data *data, SSL *ssl, const u8 **out,
         debug_printf(DEBUG_LEVEL_ERROR, "Failed to generate client data");
         return -1;
     }
+    data->clientdata_json_len = strlen(data->clientdata_json);
     debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Generated client data: %s",
                  data->clientdata_json);
 
@@ -874,8 +962,8 @@ int create_auth_response(struct ud_data *data, SSL *ssl, const u8 **out,
     packet.clientdata_json_len = data->clientdata_json_len;
     //Optional Fields
     if (data->user_id_len != 0 && data->user_id) {
-        packet.user_id = data->user_id;
-        packet.user_id_len = data->user_id_len;
+        packet.user_handle = data->user_id;
+        packet.user_handle_len = data->user_id_len;
     }
     if (data->cred_id_len != 0 && data->cred_id) {
         packet.cred_id = data->cred_id;
@@ -1045,6 +1133,55 @@ int process_auth_request(const u8 *in, size_t in_len, struct ud_data *data) {
     if (packet.timeout) {
         data->timeout = packet.timeout;
     }
-    // No need to free the packet since we reused the allocated memory
+
+    if(data->ceremony == AUTHENTICATION_SERVER_SIDE_CRED_CEREMONY){
+
+        if(packet.encrypted_allow_credentials != NULL) {
+
+            size_t iv_len = 12;
+            u8 *iv = OPENSSL_zalloc(iv_len);
+
+            size_t decrypted_allow_credentials_len = 0;
+            u8 *decrypted_allow_credentials = NULL;
+
+            if (get_message_iv(PKT_AUTH_REQUEST, iv, iv_len)!=0){
+                debug_printf(DEBUG_LEVEL_ERROR, "Deriving the iv failed");
+                return -1;
+            }
+
+            if (aes_gcm_decrypt(packet.encrypted_allow_credentials, packet.encrypted_allow_credentials_len, &decrypted_allow_credentials,
+                           &decrypted_allow_credentials_len, data->gcm_key, data->gcm_key_len, iv, iv_len)!=0){
+                debug_printf(DEBUG_LEVEL_ERROR, "Failed to decrypt allowed credentials");
+                return -1;
+            }
+
+            struct public_key_credential_descriptor *allow_credentials = {0};
+            size_t allow_credentials_len = 0;
+
+            if (cbor_parse_allowed_credentials(decrypted_allow_credentials, decrypted_allow_credentials_len,
+                          &allow_credentials, &allow_credentials_len ) != 0) {
+                debug_printf(DEBUG_LEVEL_ERROR, "Parsing the CBOR array with allowed credentials failed");
+                return -1;           
+            }
+        data->allow_credentials = allow_credentials;
+        data->allow_credentials_len = allow_credentials_len;
+        }
+        else{
+            debug_printf(DEBUG_LEVEL_ERROR, "The allowed credentials list is empty");
+            return -1;
+        }
+    }
+    if(data->ceremony == AUTHENTICATION_DISCOVERABLE_CEREMONY) {
+        if(packet.encrypted_allow_credentials != NULL){
+            debug_printf(DEBUG_LEVEL_ERROR, "The allowed credentials must not be present when discoverable credentials are used");
+            return -1;
+        }
+    }
+
+    if(packet.extensions != NULL && packet.extensions_len>0){
+        data->extensions = packet.extensions;
+        data->extensions_len = packet.extensions_len;
+    }   
+     // No need to free the packet since we reused the allocated memory
     return 0;
 }

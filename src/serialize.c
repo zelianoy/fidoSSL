@@ -27,9 +27,11 @@
 #define TIMEOUT 1
 #define AUTH_SEL 2
 #define EXCLUDE_CREDS 3
+#define ALLOW_CREDS 3
+#define USER_VERIFICATION_AUTH_REQ 4
 #define RPID 2
 #define USER_VERIFICATION 3
-#define USER_ID 1
+#define USER_HANDLE 1
 #define CRED_ID 2
 #define AUTH_ATTACH 1
 #define RESIDENT_KEY 2
@@ -54,8 +56,10 @@ const char *get_package_type_name(unsigned int type) {
         return "REG_REQUEST";
     case PKT_REG_RESPONSE:
         return "REG_RESPONSE";
-    case PKT_AUTH_INDICATION:
-        return "AUTH_INDICATION";
+    case PKT_AUTH_INDICATION_DISCOVERABLE:
+        return "AUTH_INDICATION_DISCOVERABLE";
+    case PKT_AUTH_INDICATION_SERVER_SIDE:
+        return "AUTH_INDICATION_SERVER_SIDE";
     case PKT_AUTH_REQUEST:
         return "AUTH_REQUEST";
     case PKT_AUTH_RESPONSE:
@@ -64,6 +68,41 @@ const char *get_package_type_name(unsigned int type) {
         return "Unknown Type";
     }
 }
+
+//Litte helper function to derive only a message typre without processing a whole CBOR-Array
+//Is used to help the state mashine to start the correct ceremony after pre response
+int get_packet_type(const u8 *in_buf, size_t in_len, enum packet_type *type) {
+    CborParser parser;
+    CborValue root, it;
+    CborError err;
+    size_t array_len;
+    if (in_len <= 0) {
+        debug_printf(DEBUG_LEVEL_ERROR, "No data to parse");
+        return -1;
+    }
+    err = cbor_parser_init(in_buf, in_len, 0, &parser, &root);
+    if (err != CborNoError) {
+        debug_printf(DEBUG_LEVEL_ERROR, "Error initializing CBOR parser");
+        return -1;
+    }
+    if (!cbor_value_is_array(&root)) {
+        debug_printf(DEBUG_LEVEL_ERROR, "Root container is not an array\n");
+        return -1;
+    }
+    cbor_value_get_array_length(&root, &array_len);
+    cbor_value_enter_container(&root, &it);
+    if (!cbor_value_is_integer(&it)) {
+        debug_printf(DEBUG_LEVEL_ERROR, "Packet type is not an integer");
+        return -1;
+    }
+    int packet_type;
+    cbor_value_get_int_checked(&it, &packet_type);
+    *type = (enum packet_type) packet_type;
+    return 0;
+}
+
+
+
 
 int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *out) {
     CborParser parser;
@@ -512,8 +551,6 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
                     cbor_value_leave_container(&map_it, &sub_map_it);
                 break;
                 
-
-
                 default:
                 debug_printf(DEBUG_LEVEL_ERROR, "Unknown optional parameter");
                 cbor_value_advance(&map_it);
@@ -566,9 +603,44 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
                      p->clientdata_json);
         break;
     }
-    case PKT_AUTH_INDICATION: {
+    case PKT_AUTH_INDICATION_DISCOVERABLE: {
         out = NULL;
         break;
+    }
+    case PKT_AUTH_INDICATION_SERVER_SIDE: {
+        struct auth_indication_server_side *p = (struct auth_indication_server_side *)out;
+        if (!p) {
+            debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation failed!");
+            goto err;
+        }
+        err = cbor_value_advance(&it);
+        if (err != CborNoError) {
+            debug_printf(DEBUG_LEVEL_ERROR, "Advancing failed");
+            goto err;
+        }
+        if (!cbor_value_is_byte_string(&it)) {
+            debug_printf(DEBUG_LEVEL_ERROR, "Ephemeral user id is not a byte string");
+            goto err;
+        }
+        cbor_value_calculate_string_length(&it, &p->eph_user_id_len);
+        if(p->eph_user_id_len!=256){
+            debug_printf(DEBUG_LEVEL_ERROR, "Ephemeral user id is not 256 bytes");
+            goto err;
+        }
+        p->eph_user_id = OPENSSL_zalloc(p->eph_user_id_len);
+        cbor_value_copy_byte_string(&it, p->eph_user_id, &p->eph_user_id_len, &it);
+        debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE, "    ephemeral user id: ", p->eph_user_id,
+                        p->eph_user_id_len);
+        if (!cbor_value_is_byte_string(&it)) {
+            debug_printf(DEBUG_LEVEL_ERROR, "Encrypted user name is not a byte string");
+            goto err;
+        }
+        cbor_value_calculate_string_length(&it, &p->encrypted_user_name_len);
+        p->encrypted_user_name = OPENSSL_zalloc(p->encrypted_user_name_len);
+        cbor_value_copy_byte_string(&it, p->encrypted_user_name, &p->encrypted_user_name_len, &it);
+        debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE, "    encrypted user name: ", p->encrypted_user_name,
+                        p->encrypted_user_name_len);  
+        break;                              
     }
     case PKT_AUTH_REQUEST: {
         struct auth_request *p = (struct auth_request *)out;
@@ -631,7 +703,7 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
                 cbor_value_copy_text_string(&map_it, p->rp_id, &len, &map_it);
                 debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    rp id: %s", p->rp_id);
                 break;
-            case USER_VERIFICATION:
+            case USER_VERIFICATION_AUTH_REQ:
                 if (!cbor_value_is_integer(&map_it)) {
                     debug_printf(DEBUG_LEVEL_ERROR,
                                  "User verification is not an integer");
@@ -643,6 +715,60 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
                 debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    user verification: %s",
                              get_user_verification_requirements_name(user_verification));
                 cbor_value_advance(&map_it);
+                break;
+            case ALLOW_CREDS:
+                if(!cbor_value_is_byte_string(&map_it)){
+                    debug_printf(DEBUG_LEVEL_ERROR, 
+                                 "Encrypted allowed credentials are not a byte string");
+                    goto err;
+                }
+                cbor_value_calculate_string_length(&map_it, &p->encrypted_allow_credentials_len);
+                p->encrypted_allow_credentials = OPENSSL_zalloc(p->encrypted_allow_credentials_len);
+                cbor_value_copy_byte_string(&map_it, p->encrypted_allow_credentials, &p->encrypted_allow_credentials_len, &map_it);
+                //TODO: print spaeter implementieren
+                
+                break;
+            break;
+            case EXTENSIONS:
+                if (!cbor_value_is_map(&map_it)) {
+                    debug_printf(DEBUG_LEVEL_ERROR,
+                        "Expected a map container for extensions");
+                    goto err;
+                }
+                cbor_value_get_map_length(&map_it, &len);
+                p->extensions_len = len;
+                p->extensions = OPENSSL_zalloc(p->extensions_len * sizeof(struct extension));
+                cbor_value_enter_container(&map_it, &sub_map_it);
+                    for(size_t i = 0;i < p->extensions_len; i++ ){
+                        if (!cbor_value_is_text_string(&sub_map_it)) {
+                            debug_printf(DEBUG_LEVEL_ERROR, "Extension id is not a text string");
+                            return -1;
+                        }
+                        cbor_value_calculate_string_length(&sub_map_it, &len);
+                        if(len<1||len>256){
+                            debug_printf(DEBUG_LEVEL_ERROR, "Size of extension id is not within allowed range");
+                            goto err;
+                        }
+                        p->extensions[i].extension_id_len = len;
+                        p->extensions[i].extension_id = OPENSSL_zalloc(len + 1);
+                        cbor_value_copy_text_string(&sub_map_it, p->extensions[i].extension_id, &len, &sub_map_it);
+                        if(!cbor_value_is_byte_string(&sub_map_it)) {
+                            debug_printf(DEBUG_LEVEL_ERROR, "extension data is not a byte string");
+                            return -1;
+                        }
+                        cbor_value_calculate_string_length(&sub_map_it, &len);
+                        if(len<1||len>4096){
+                            debug_printf(DEBUG_LEVEL_ERROR, "Size of extension data is not within allowed range");
+                            goto err;
+                        }
+                        p->extensions[i].extension_data_len = len;
+                        p->extensions[i].extension_data = OPENSSL_zalloc(len);
+                        cbor_value_copy_byte_string(&sub_map_it, p->extensions[i].extension_data, &len, &sub_map_it);         //debug_print_hex(DEBUG_LEVEL_VERBOSE, " extension data:  %zu ", p->extensions[i].extension_data,  p->extensions[i].extension_data_len);
+                    }
+                    if(!cbor_value_at_end(&sub_map_it)){
+                        return -1;
+                    }
+                    cbor_value_leave_container(&map_it, &sub_map_it);
                 break;
             default:
                 // We dont error out here, because the fido spec mandates to be
@@ -671,7 +797,9 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
         }
         cbor_value_calculate_string_length(&it, &p->clientdata_json_len);
         p->clientdata_json = OPENSSL_zalloc(p->clientdata_json_len + 1); // +1 for null terminator
-        cbor_value_copy_text_string(&it, p->clientdata_json, &len, &it);
+        size_t temp_buf;
+        temp_buf = p->clientdata_json_len + 1;
+        cbor_value_copy_text_string(&it, p->clientdata_json, &temp_buf, &it);
         debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    clientdata: %s",
                      p->clientdata_json);
         if (!cbor_value_is_byte_string(&it)) {
@@ -713,16 +841,16 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
             cbor_value_get_int_checked(&map_it, &key);
             cbor_value_advance(&map_it);
             switch (key) {
-            case USER_ID:
+            case USER_HANDLE:
                 if (!cbor_value_is_byte_string(&map_it)) {
-                    debug_printf(DEBUG_LEVEL_ERROR, "User id is not a byte string");
+                    debug_printf(DEBUG_LEVEL_ERROR, "User handle is not a byte string");
                     goto err;
                 }
-                cbor_value_calculate_string_length(&map_it, &p->user_id_len);
-                p->user_id = OPENSSL_zalloc(p->user_id_len);
-                cbor_value_copy_byte_string(&map_it, p->user_id, &p->user_id_len, &map_it);
-                debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE, "    user id: ", p->user_id,
-                                p->user_id_len);
+                cbor_value_calculate_string_length(&map_it, &p->user_handle_len);
+                p->user_handle = OPENSSL_zalloc(p->user_handle_len);
+                cbor_value_copy_byte_string(&map_it, p->user_handle, &p->user_handle_len, &map_it);
+                debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE, "    user id: ", p->user_handle,
+                                p->user_handle_len);
                 break;
             case CRED_ID:
                 if (!cbor_value_is_byte_string(&map_it)) {
@@ -961,7 +1089,7 @@ int cbor_parse_reg_request_encrypted_data(const u8 *in_buf, size_t in_len, struc
         if (err != CborNoError) {
             debug_printf(DEBUG_LEVEL_ERROR, "Leaving sub container failed");
             goto err;
-        } 
+        }
     }
     if(!cbor_value_at_end(&it)){
             return -1;
@@ -978,10 +1106,89 @@ int cbor_parse_reg_request_encrypted_data(const u8 *in_buf, size_t in_len, struc
 }
 
 
-
-
-
-
+int cbor_parse_allowed_credentials(const u8 *in_buf, size_t in_len, struct public_key_credential_descriptor **output, size_t *allow_credentials_len){
+    CborParser parser;
+    CborValue root, it, sub_it;
+    CborError err;
+    uint64_t type_temp;
+    size_t  array_len;
+    if (in_len <= 0) {
+        debug_printf(DEBUG_LEVEL_ERROR, "No data to parse");
+        return -1;
+    }
+    err = cbor_parser_init(in_buf, in_len, 0, &parser, &root);
+    if (err != CborNoError) {
+        debug_printf(DEBUG_LEVEL_ERROR, "Error initializing CBOR parser");
+        return -1;
+    }
+    if (!cbor_value_is_array(&root)) {
+        debug_printf(DEBUG_LEVEL_ERROR, "Root container is not an array\n");
+        return -1;
+    }
+    
+    cbor_value_get_array_length(&root, &array_len);
+    if(array_len < 1){
+        debug_printf(DEBUG_LEVEL_ERROR, "Allowed credentials array is empty");
+        goto err;
+    }
+    
+    *output = OPENSSL_zalloc(array_len * sizeof(struct public_key_credential_descriptor));
+    if(*output == NULL){
+        debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation failed");
+        return -1;
+    }
+    cbor_value_enter_container(&root, &it);
+    for(size_t i = 0; i < array_len; i++){
+        if(!cbor_value_is_array(&it)){
+                debug_printf(DEBUG_LEVEL_ERROR, " ALlowed credential is not an array");
+                goto err;
+            }
+        cbor_value_enter_container(&it, &sub_it);
+        if(!cbor_value_is_unsigned_integer(&sub_it)){
+            debug_printf(DEBUG_LEVEL_ERROR, "Type is not an unsigned integer");
+            goto err;
+        }
+        cbor_value_get_uint64(&sub_it, &type_temp);
+        if(type_temp != PUBLIC_KEY ){
+            debug_printf(DEBUG_LEVEL_ERROR, "Descriptor type is not a public key");
+            goto err;
+        }
+        // (*output) bedeutet dass wir den Zeigerwert lesen, der an der Adresse gespeicher ist, auf die output zeigt
+        (*output)[i].type = PUBLIC_KEY;
+        cbor_value_advance(&sub_it);
+        if(!cbor_value_is_byte_string(&sub_it)){
+            debug_printf(DEBUG_LEVEL_ERROR, "The id is not a byte string");
+            return -1;
+        }
+        cbor_value_calculate_string_length(&sub_it, &(*output)[i].id_len);
+        (*output)[i].id = OPENSSL_zalloc((*output)[i].id_len);
+        if((*output)[i].id == NULL){
+            debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation failed");
+            return -1;
+        }
+        cbor_value_copy_byte_string(&sub_it, (*output)[i].id, &(*output)[i].id_len, &sub_it);
+        if(!cbor_value_at_end(&sub_it)){
+            return -1;
+        }
+        err = cbor_value_leave_container(&it, &sub_it);
+        if (err != CborNoError) {
+            debug_printf(DEBUG_LEVEL_ERROR, "Leaving sub container failed");
+            goto err;
+        }
+    }
+    if(!cbor_value_at_end(&it)){
+            return -1;
+    }
+    err = cbor_value_leave_container(&root, &it);
+    if (err != CborNoError) {
+        debug_printf(DEBUG_LEVEL_ERROR, "Leaving sub container failed");
+        goto err;
+    }
+    *allow_credentials_len = array_len;
+    return 0;
+    err:
+        return -1;
+}
 
 int cbor_build(const void *input, enum packet_type type, const u8 **out_buf,
           size_t *out_len) {
@@ -1171,7 +1378,6 @@ int cbor_build(const void *input, enum packet_type type, const u8 **out_buf,
                 debug_printf(DEBUG_LEVEL_MORE_VERBOSE, " attestation conveyance preference: %s",
                                  get_attestation_conveyance_pref_name(in->attestation));
             }
-
             if(in->extensions){
                 cbor_encode_uint(&map, EXTENSIONS);
                 cbor_encoder_create_map(&map, &sub_map, in->extensions_len);
@@ -1210,11 +1416,26 @@ int cbor_build(const void *input, enum packet_type type, const u8 **out_buf,
                      in->clientdata_json);
         break;
     }
-    case PKT_AUTH_INDICATION: {
+    case PKT_AUTH_INDICATION_DISCOVERABLE: {
         // Encode just the packet type
         cbor_encoder_create_array(&encoder, &array, 1);
-        cbor_encode_int(&array, PKT_AUTH_INDICATION);
+        cbor_encode_int(&array, PKT_AUTH_INDICATION_DISCOVERABLE);
         break;
+    }
+    case PKT_AUTH_INDICATION_SERVER_SIDE: {
+        struct auth_indication_server_side *in = (struct auth_indication_server_side *)input;
+        cbor_encoder_create_array(&encoder, &array, 3);
+        cbor_encode_int(&array, PKT_AUTH_INDICATION_SERVER_SIDE);
+        // Required fields are packet type, eph_user_id and encrypted_user_name
+        cbor_encode_byte_string(&array, in->eph_user_id, in->eph_user_id_len);
+        debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE,
+                        "    eph user id: ", in->eph_user_id,
+                        in->eph_user_id_len);
+        cbor_encode_byte_string(&array, in->encrypted_user_name, in->encrypted_user_name_len);
+        debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE,
+                        "    encrypted user name: ", in->encrypted_user_name,
+                        in->encrypted_user_name_len);
+        break;           
     }
     case PKT_AUTH_REQUEST: {
         struct auth_request *in = (struct auth_request *)input;
@@ -1226,6 +1447,10 @@ int cbor_build(const void *input, enum packet_type type, const u8 **out_buf,
         if (in->user_verification != 0)
             ++num_optionals;
         if (in->timeout != 0)
+            ++num_optionals;
+        if (in->encrypted_allow_credentials != NULL)
+            ++num_optionals;
+        if (in->extensions != NULL)
             ++num_optionals;
         // Required fields are packet type and challenge. The last field of the
         // array is a map if there are optional parameters
@@ -1247,12 +1472,30 @@ int cbor_build(const void *input, enum packet_type type, const u8 **out_buf,
                 cbor_encode_text_stringz(&map, in->rp_id);
                 debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    rp id: %s", in->rp_id);
             }
-            if (in->user_verification != 0) {
-                cbor_encode_int(&map, USER_VERIFICATION);
+            if(in->encrypted_allow_credentials != NULL) {
+                cbor_encode_int(&map, ALLOW_CREDS);
+                cbor_encode_byte_string(&map, in->encrypted_allow_credentials, in->encrypted_allow_credentials_len);
+                //TODO: hier print die allowed credentials später
+            }
+            if(in->user_verification != 0) {
+                cbor_encode_int(&map, USER_VERIFICATION_AUTH_REQ);
                 cbor_encode_int(&map, in->user_verification);
                 debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    user verification: %s",
                              get_action_policy_name(in->user_verification));
             }
+            if(in->extensions) {
+                cbor_encode_uint(&map, EXTENSIONS);
+                cbor_encoder_create_map(&map, &sub_map, in->extensions_len);
+                for(size_t i = 0; i < in->extensions_len; i++ ) {
+                        cbor_encode_text_string(&sub_map, in->extensions[i].extension_id, in->extensions[i].extension_id_len );
+                        cbor_encode_byte_string(&sub_map, in->extensions[i].extension_data, in->extensions[i].extension_data_len);
+                }
+                err = cbor_encoder_close_container(&map, &sub_map);
+                if (err) {
+                    debug_printf(DEBUG_LEVEL_ERROR, "Could not close CBOR map");
+                    return -1;
+                }
+            }      
             err = cbor_encoder_close_container(&array, &map);
             if (err) {
                 debug_printf(DEBUG_LEVEL_ERROR, "Could not close CBOR map");
@@ -1268,7 +1511,7 @@ int cbor_build(const void *input, enum packet_type type, const u8 **out_buf,
                in->signature_len != 0);
         // Count optional parameters
         size_t num_optionals =  0;
-        if (in->user_id_len != 0 && in->user_id)
+        if (in->user_handle_len != 0 && in->user_handle)
             ++num_optionals;
         if (in->cred_id_len != 0 && in->cred_id)
             ++num_optionals;
@@ -1288,11 +1531,11 @@ int cbor_build(const void *input, enum packet_type type, const u8 **out_buf,
                         in->signature_len);
         if (num_optionals > 0) {
             cbor_encoder_create_map(&array, &map, num_optionals);
-            if (in->user_id_len != 0 && in->user_id) {
-                cbor_encode_int(&map, USER_ID);
-                cbor_encode_byte_string(&map, in->user_id, in->user_id_len);
-                debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE, "    user id: ", in->user_id,
-                        in->user_id_len);
+            if (in->user_handle_len != 0 && in->user_handle) {
+                cbor_encode_int(&map, USER_HANDLE);
+                cbor_encode_byte_string(&map, in->user_handle, in->user_handle_len);
+                debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE, "    user id: ", in->user_handle,
+                        in->user_handle_len);
             }
             if (in->cred_id_len != 0 && in->cred_id) {
                 cbor_encode_int(&map, CRED_ID);
@@ -1371,7 +1614,7 @@ int cbor_build_reg_request_encrypted_data(const struct reg_request_encrypted_dat
     }
     CborEncoder encoder, array, sub_array, descriptor_array;
     cbor_encoder_init(&encoder, buf, ENC_DATA_BUF_SIZE, 0);
-    CborError err; 
+    CborError err;
     assert(input->padded_user_display_name != NULL && input->padded_user_display_name_len == 256 
         && input->padded_user_name != NULL && input->padded_user_name_len == 256 && input->user_id != NULL
         && input->user_id_len == 64);
@@ -1582,4 +1825,42 @@ fail:
     free(buf);
     warnx("cbor_build_attestation_object: encoding failed", "");
     return NULL;
+}
+
+
+int cbor_build_allowed_credentials(const struct public_key_credential_descriptor *input, size_t allow_credentials_len, u8 **out_buf, size_t *out_len){
+    u8 *buf = OPENSSL_zalloc(ENC_DATA_BUF_SIZE);
+    if (!buf){
+        debug_printf(DEBUG_LEVEL_ERROR, "Could not allocate the memory for CBOR encoding");
+        return -1;
+    }
+    CborEncoder encoder, array, descriptor_array;
+    cbor_encoder_init(&encoder, buf, ENC_DATA_BUF_SIZE, 0);
+    CborError err;
+    cbor_encoder_create_array(&encoder, &array, allow_credentials_len);
+    for(size_t i = 0; i < allow_credentials_len; i++){
+        //Parent-Array ist der sub_array, Kind-Array ist descriptor_array wobei jeder Descroptor bisher zwei Felder hat, bzw. type und id, weil noch transports nicht implementiert sind
+        cbor_encoder_create_array(&array, &descriptor_array, 2);
+        cbor_encode_uint(&descriptor_array, input[i].type);
+        cbor_encode_byte_string(&descriptor_array, input[i].id, input[i].id_len);
+        //hier noch ohne transports
+        err = cbor_encoder_close_container(&array, &descriptor_array);
+        if (err != CborNoError){
+            debug_printf(DEBUG_LEVEL_ERROR, "Could not close CBOR array");
+            debug_printf(DEBUG_LEVEL_ERROR, "Error: %s", cbor_error_string(err));
+            goto err;
+        }
+    }
+    err = cbor_encoder_close_container(&encoder, &array);
+    if (err != CborNoError) {
+        debug_printf(DEBUG_LEVEL_ERROR, "Could not close CBOR array");
+        debug_printf(DEBUG_LEVEL_ERROR, "Error: %s", cbor_error_string(err));
+        goto err;
+    }
+    *out_buf = buf;
+    *out_len = cbor_encoder_get_buffer_size(&encoder, buf);
+    return 0;
+    err:
+        OPENSSL_free(buf);
+        return -1;   
 }

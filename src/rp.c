@@ -118,6 +118,8 @@ struct rp_data *init_rp(SSL *ssl, void *server_opts) {
     // Init the state
     data->state = STATE_INITIAL;
 
+    // Init the ceremony 
+    data->ceremony = UNDEFINED_CEREMONY;
     // Open the database
     data->db = init_db("fido2.db");
 
@@ -652,13 +654,7 @@ int verify_authdata(struct rp_data *data, struct authdata *authdata,
         debug_printf(DEBUG_LEVEL_MORE_VERBOSE,
                      "    User verification was not required");
     }
-    // TODO: what about user presence? What can we check it against?
-    // if (!(authdata->flags & (1 << 0))) {
-    //     debug_printf(DEBUG_LEVEL_ERROR, "    User present flag is not
-    //     set"); free_authdata(authdata); return -1;
-    // }
-    // debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "    User present flag is
-    // set");
+    // The user presence will be cheked later with libfido2
     return 0;
 }
 //function for deriviation of the aes-256-gcm key
@@ -748,7 +744,6 @@ int create_reg_request(struct rp_data *data, const u8 **out,
     //    packet.pub_key_cred_params[i].type = PUBLIC_KEY;
     //}
 
-    
 
     // Check if the user already exists in the database
     if (get_user_id(data->db, data->user_name, &data->user_id, &data->user_id_len) == 0) {
@@ -814,7 +809,7 @@ int create_reg_request(struct rp_data *data, const u8 **out,
     encrypted_data.user_id = data->user_id;
     encrypted_data.user_id_len = data->user_id_len;
     
-    if(get_excluded_credential_descriptors(data->db, data->user_id, data->user_id_len, &exclude_credentials, &exclude_credentials_len) != 0 ){
+    if(get_credential_descriptors(data->db, data->user_id, data->user_id_len, data->rp_id, &exclude_credentials, &exclude_credentials_len) != 0 ){
         debug_printf(DEBUG_LEVEL_ERROR, "Database error");
         return -1;
     }
@@ -882,7 +877,8 @@ int create_reg_request(struct rp_data *data, const u8 **out,
     OPENSSL_free(packet.pub_key_cred_params);
     return 0;
 }
-
+// TODO: Bei serverseitigen Credentials müssen die für Benutzer und RP-ID gespeicherten Credential
+// Deskriptoren als erlaubte Credentials übertragen werden. Bei discoverable Credentials bleibt diese Liste leer.
 int create_auth_request(struct rp_data *data, const u8 **out,
                         size_t *out_len) {
     // Create a challenge and save it to the rp_data struct
@@ -908,6 +904,48 @@ int create_auth_request(struct rp_data *data, const u8 **out,
     if (data->user_verification != 0) {
         packet.user_verification = data->user_verification;
     }
+
+    if(data->ceremony == AUTHENTICATION_SERVER_SIDE_CRED_CEREMONY) {
+         struct public_key_credential_descriptor *allow_credentials = NULL;
+         size_t allow_credentials_len = 0;
+        if(get_credential_descriptors(data->db, data->user_id, data->user_id_len, data->rp_id, &allow_credentials, &allow_credentials_len) != 0 ){
+            debug_printf(DEBUG_LEVEL_ERROR, "Database error");
+            return -1;
+        }
+        if(allow_credentials_len < 1){
+            debug_printf(DEBUG_LEVEL_ERROR, "The authentication can not be done because the list of allowed credentials is empty");
+            return -1;
+        }
+        data->allow_credentials = allow_credentials;
+        data->allow_credentials_len = allow_credentials_len;
+
+    //packet.allow_credentials = allow_credentials;
+    //packet.allow_credentials_len = allow_credentials_len;
+        u8 *allow_credentials_cbor_out = NULL;
+        size_t allow_credentials_cbor_out_len = 0;
+        if(cbor_build_allowed_credentials(allow_credentials, allow_credentials_len, &allow_credentials_cbor_out, &allow_credentials_cbor_out_len)){
+           return -1;
+        }
+
+        size_t iv_len = 12;
+        u8 *iv = OPENSSL_zalloc(iv_len);
+
+        if(get_message_iv(PKT_AUTH_REQUEST, iv, iv_len)!=0){
+            debug_printf(DEBUG_LEVEL_ERROR, "Deriving the iv failed");
+            return -1;
+        }
+
+        size_t encrypted_allow_credentials_len = 0;
+        u8 *encrypted_allow_credentials = NULL;
+
+        if(aes_gcm_encrypt(allow_credentials_cbor_out, allow_credentials_cbor_out_len,
+            &encrypted_allow_credentials, &encrypted_allow_credentials_len, data->gcm_key, data->gcm_key_len, iv, iv_len) != 0){
+            debug_printf(DEBUG_LEVEL_ERROR, "Failed to aes-gcm encrypt allowed credentials");
+            return -1;
+        }
+        packet.encrypted_allow_credentials = encrypted_allow_credentials;
+        packet.encrypted_allow_credentials_len = encrypted_allow_credentials_len;
+    }
     return cbor_build(&packet, PKT_AUTH_REQUEST, out, out_len);
 }
 
@@ -916,136 +954,191 @@ int process_indication(const u8 *in, size_t in_len, struct rp_data *data) {
         return -1;
     }
     enum packet_type type = UNDEFINED;
-    struct reg_indication packet = {0};
-    if (cbor_parse(in, in_len, &type, &packet) != 0) {
-        debug_printf(DEBUG_LEVEL_ERROR, "Failed to parse indication");     
-        OPENSSL_free(packet.eph_user_id);
-        OPENSSL_free(packet.encrypted_data);
+    if(get_packet_type(in, in_len, &type) != 0) {
         return -1;
     }
-    // Pre indication has no data. We simply set the new state
-    if (data->state == STATE_INITIAL && type == PKT_PRE_INDICATION) {
-        data->state = STATE_PRE_INDICATION_RECEIVED;
-    } else if (data->state == STATE_PRE_RESPONSE_SENT &&
-               type == PKT_REG_INDICATION) {
-        //we check only length because the server does not store the ephemeral user id after the pre response
-        if (data->eph_user_id_len != packet.eph_user_id_len) {
-            debug_printf(DEBUG_LEVEL_ERROR, "Unknown ephemeral user id");
-            OPENSSL_free(packet.encrypted_data);
-            return -1;
+
+    switch(type) {
+        case PKT_PRE_INDICATION: {
+            // Pre indication has no data. We simply set the new state
+            if (data->state == STATE_INITIAL) {
+                if (cbor_parse(in, in_len, &type, NULL) != 0) {
+                    debug_printf(DEBUG_LEVEL_ERROR, "Failed to parse pre indication");     
+                    return -1;
+                }
+                data->state = STATE_PRE_INDICATION_RECEIVED;
+                break;
+            }
+            else { 
+                return -1;
+            }
         }
-    u8 *gcm_key = NULL;
-    unsigned int gcm_key_len = 0;
-    if(derive_gcm_key(data, packet.eph_user_id, packet.eph_user_id_len, &gcm_key, &gcm_key_len)!=0){
-        debug_printf(DEBUG_LEVEL_ERROR, "Deriving the gcm key failed");
-        return -1;
-    }
-    data->gcm_key = gcm_key;
-    data->gcm_key_len = gcm_key_len;
+        case PKT_REG_INDICATION: {
+            if (data->state == STATE_PRE_RESPONSE_SENT) {
+                struct reg_indication packet;
+                if (cbor_parse(in, in_len, &type, &packet) != 0) {
+                    debug_printf(DEBUG_LEVEL_ERROR, "Failed to parse registration indication");     
+                    return -1;
+                }
+                if (data->eph_user_id_len != packet.eph_user_id_len) {
+                    debug_printf(DEBUG_LEVEL_ERROR, "Unknown ephemeral user id");
+                    OPENSSL_free(packet.encrypted_data);
+                    return -1;
+                }
+                u8 *gcm_key = NULL;
+                unsigned int gcm_key_len = 0;
+                if(derive_gcm_key(data, packet.eph_user_id, packet.eph_user_id_len, &gcm_key, &gcm_key_len)!=0){
+                    debug_printf(DEBUG_LEVEL_ERROR, "Deriving the gcm key failed");
+                    return -1;
+                }
+                data->gcm_key = gcm_key;
+                data->gcm_key_len = gcm_key_len;
+                size_t iv_len = 12;
+                u8 *iv = OPENSSL_zalloc(iv_len);
+                if(iv == NULL){
+                    debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation for iv failed");
+                    return -1;
+                }
+                if(get_message_iv(PKT_REG_INDICATION, iv, iv_len)!=0){
+                    debug_printf(DEBUG_LEVEL_ERROR, "Deriving the iv failed");
+                    return -1;
+                }
 
-
-    size_t iv_len = 12;
-    u8 *iv = OPENSSL_zalloc(iv_len);
-    if(iv == NULL){
-        debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation for iv failed");
-        return -1;
-    }
-    if(get_message_iv(PKT_REG_INDICATION, iv, iv_len)!=0){
-        debug_printf(DEBUG_LEVEL_ERROR, "Deriving the iv failed");
-        return -1;
-    }
-
-    u8 *cbor_array_decrypted = NULL;
-    size_t cbor_array_decrypted_len = 0;
-    if (aes_gcm_decrypt(packet.encrypted_data, packet.encrypted_data_len,
-                        &cbor_array_decrypted, &cbor_array_decrypted_len, data->gcm_key,
-                        data->gcm_key_len, iv, iv_len) != 0) {
-        debug_printf(DEBUG_LEVEL_ERROR, "Failed to decrypt CBOR array");
-        OPENSSL_free(packet.eph_user_id);
-        OPENSSL_free(packet.encrypted_data);
-        return -1;
-    }
-    struct encrypted_data encrypted_data = {0};
-
-    if(cbor_parse_encrypted_data(cbor_array_decrypted, cbor_array_decrypted_len, &encrypted_data)!=0){
-        OPENSSL_free(encrypted_data.padded_user_display_name);
-        OPENSSL_free(encrypted_data.ticket);
-        OPENSSL_free(packet.eph_user_id);
-        OPENSSL_free(packet.encrypted_data);
-        free(cbor_array_decrypted);
-        return -1;
-    }
-    
-   
-    char *unpadded_data = OPENSSL_malloc(257 * sizeof(*unpadded_data));
-    if (unpadded_data == NULL){
-        OPENSSL_free(packet.eph_user_id);
-        OPENSSL_free(encrypted_data.padded_user_display_name);
-        OPENSSL_free(encrypted_data.ticket);
-        OPENSSL_free(packet.encrypted_data);      
-        free(cbor_array_decrypted);
-        return -1;
-    }
-    size_t unpadded_data_len = 0 ;
-
-
-    if(remove_bit_padding(unpadded_data, encrypted_data.padded_user_display_name, &unpadded_data_len)!=0){
-        OPENSSL_free(unpadded_data);
-        OPENSSL_free(packet.eph_user_id);
-        OPENSSL_free(encrypted_data.padded_user_display_name);
-        OPENSSL_free(encrypted_data.ticket);
-        OPENSSL_free(packet.encrypted_data);
-        free(cbor_array_decrypted);
-        return -1;
-    }
-
-
-    if (data->ticket_len != encrypted_data.ticket_len ||
-            CRYPTO_memcmp(data->ticket, encrypted_data.ticket, data->ticket_len) != 0) {
-            debug_printf(DEBUG_LEVEL_ERROR, "Invalid Ticket");
-            OPENSSL_free(unpadded_data);
-            OPENSSL_free(encrypted_data.padded_user_display_name);
-            OPENSSL_free(encrypted_data.ticket);
-            OPENSSL_free(packet.eph_user_id);
-            OPENSSL_free(packet.encrypted_data);
-            free(cbor_array_decrypted);
-            return -1;
-    }
-
-    //According to the I-D, the user name may be the same as the user display name
-    //Thus this implementation uses this design choice
-    data->user_display_name = unpadded_data;
-    char *unpadded_data_copy = OPENSSL_malloc(257 * sizeof(*unpadded_data_copy));
-    memcpy(unpadded_data_copy, unpadded_data, unpadded_data_len + 1);
-    data->user_name = unpadded_data_copy;
-
-   
-
-    debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Client provided a valid ticket");
-    OPENSSL_free(packet.eph_user_id);
-    OPENSSL_free(encrypted_data.padded_user_display_name);
-    OPENSSL_free(encrypted_data.ticket);
-    OPENSSL_free(packet.encrypted_data);
-    free(cbor_array_decrypted);
-
-    data->state = STATE_REG_INDICATION_RECEIVED;
-    }
-    // Again, the auth indication has no data. We simply set the state
-    else if (data->state == STATE_INITIAL && type == PKT_AUTH_INDICATION) {
-        // Check if a database exists
-        struct stat buffer;
-        if (stat("fido2.db", &buffer) != 0) {
-            debug_printf(DEBUG_LEVEL_ERROR,
-                         "Detected an authentication request "
-                         "but no database exists. You must enroll "
-                         "a credential before you can authenticate");
-            return -1;
+                u8 *cbor_array_decrypted = NULL;
+                size_t cbor_array_decrypted_len = 0;
+                if (aes_gcm_decrypt(packet.encrypted_data, packet.encrypted_data_len,
+                                    &cbor_array_decrypted, &cbor_array_decrypted_len, data->gcm_key,
+                                    data->gcm_key_len, iv, iv_len) != 0) {
+                    debug_printf(DEBUG_LEVEL_ERROR, "Failed to decrypt CBOR array");
+                    return -1;
+                }
+                struct encrypted_data encrypted_data = {0};
+                if(cbor_parse_encrypted_data(cbor_array_decrypted, cbor_array_decrypted_len, &encrypted_data)!=0){
+                    return -1;
+                }
+                char *unpadded_data = OPENSSL_malloc(257 * sizeof(*unpadded_data));
+                if (unpadded_data == NULL){
+                    return -1;
+                }
+                size_t unpadded_data_len = 0 ;
+                if(remove_bit_padding(unpadded_data, encrypted_data.padded_user_display_name, &unpadded_data_len)!=0){
+                    return -1;
+                }
+                if (data->ticket_len != encrypted_data.ticket_len ||
+                    CRYPTO_memcmp(data->ticket, encrypted_data.ticket, data->ticket_len) != 0) {
+                    debug_printf(DEBUG_LEVEL_ERROR, "Invalid Ticket");
+                    return -1;
+                }
+                debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Client provided a valid ticket");
+               
+                //According to the I-D, the user name may be the same as the user display name
+                //Thus this implementation uses this design choice
+                data->user_display_name = unpadded_data;
+                char *unpadded_data_copy = OPENSSL_malloc(257 * sizeof(*unpadded_data_copy));
+                memcpy(unpadded_data_copy, unpadded_data, unpadded_data_len + 1);
+                data->user_name = unpadded_data_copy;
+                data->ceremony = REGISTRATION_CEREMONY;
+                data->state = STATE_REG_INDICATION_RECEIVED;
+                break;
+            }
+            else { 
+                return -1;
+            }
         }
-        data->state = STATE_AUTH_INDICATION_RECEIVED;
-    } else {
+        case PKT_AUTH_INDICATION_DISCOVERABLE: {
+            if(data->state == STATE_INITIAL) {
+                if (cbor_parse(in, in_len, &type, NULL) != 0) {
+                    debug_printf(DEBUG_LEVEL_ERROR, "Failed to parse authentication indication with discoverable credentials");     
+                    return -1;
+                }
+                // Check if a database exists
+                struct stat buffer;
+                if (stat("fido2.db", &buffer) != 0) {
+                    debug_printf(DEBUG_LEVEL_ERROR,
+                             "Detected an authentication request "
+                             "but no database exists. You must enroll "
+                             "a credential before you can authenticate");
+                    return -1;
+                }
+                data->ceremony = AUTHENTICATION_DISCOVERABLE_CEREMONY;
+                data->state = STATE_AUTH_INDICATION_DISCOVERABLE_RECEIVED;
+                break;
+            }
+            else { 
+                return -1;
+            }
+        }
+        // Typ 6 darf nur nach einer PreResponse verarbeitet werden. Der Server leitet den AES-GCM-Schlüssel
+        // aus der übertragenen ephemeren User-ID erneut ab, entschlüsselt den gepaddeten Benutzernamen und sucht 
+        // anschließend den Benutzer in der Datenbank
+        case PKT_AUTH_INDICATION_SERVER_SIDE: {
+            if(data->state == STATE_PRE_RESPONSE_SENT) {
+                struct auth_indication_server_side packet = {0};
+                if (cbor_parse(in, in_len, &type, &packet) != 0) {
+                    debug_printf(DEBUG_LEVEL_ERROR, "Failed to parse authentiification indication");     
+                    return -1;
+                }
+                
+                    if (data->eph_user_id_len != packet.eph_user_id_len) {
+                        debug_printf(DEBUG_LEVEL_ERROR, "Unknown ephemeral user id");
+                        return -1;
+                    }
+                    u8 *gcm_key = NULL;
+                    unsigned int gcm_key_len = 0;
+                    if(derive_gcm_key(data, packet.eph_user_id, packet.eph_user_id_len, &gcm_key, &gcm_key_len)!=0){
+                       debug_printf(DEBUG_LEVEL_ERROR, "Deriving the gcm key failed");
+                        return -1;
+                    }
+                    data->gcm_key = gcm_key;
+                    data->gcm_key_len = gcm_key_len;
+                    size_t iv_len = 12;
+                    u8 *iv = OPENSSL_zalloc(iv_len);
+                    if(iv == NULL){
+                        debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation for iv failed");
+                        return -1;
+                    }
+                    if(get_message_iv(PKT_AUTH_INDICATION_SERVER_SIDE, iv, iv_len)!=0){
+                        debug_printf(DEBUG_LEVEL_ERROR, "Deriving the iv failed");
+                        return -1;
+                    }
+                    u8 *decrypted_user_name = NULL;
+                    size_t decrypted_user_name_len = 0;
+                    char *unpadded_user_name = OPENSSL_malloc(257 * sizeof(*unpadded_user_name));
+                    if(unpadded_user_name == NULL) {
+                        debug_printf(DEBUG_LEVEL_ERROR, "Memory allocation failed");
+                        return -1;
+                    }
+                    size_t unpadded_user_name_len = 0;
+                    if (aes_gcm_decrypt(packet.encrypted_user_name, packet.encrypted_user_name_len,
+                                        &decrypted_user_name, &decrypted_user_name_len, data->gcm_key,
+                                        data->gcm_key_len, iv, iv_len) != 0) {
+                        debug_printf(DEBUG_LEVEL_ERROR, "Failed to decrypt CBOR array");
+                        OPENSSL_free(packet.eph_user_id);
+                        OPENSSL_free(packet.encrypted_user_name);
+                            return -1;
+                    }
+                    if (remove_bit_padding(unpadded_user_name, decrypted_user_name, &unpadded_user_name_len)!=0){
+                        OPENSSL_free(decrypted_user_name);
+                        return -1;
+                    }
+                    // Check if the user already exists in the database
+                    if (get_user_id(data->db, unpadded_user_name, &data->user_id, &data->user_id_len) == 0) {   
+                        debug_print_hex(
+                        DEBUG_LEVEL_MORE_VERBOSE,
+                        "User is registered and has a user id: ", data->user_id,
+                        data->user_id_len);
+                    } 
+                    else{
+                        debug_printf(DEBUG_LEVEL_ERROR, "User is not registred in the database");
+                        return -1;
+                    }
+                data->ceremony = AUTHENTICATION_SERVER_SIDE_CRED_CEREMONY;
+                data->state = STATE_AUTH_INDICATION_SERVER_SIDE_RECEIVED;
+                break;    
+            }
+        }
+        default: 
         debug_printf(DEBUG_LEVEL_ERROR, "Received unexpected packet");
-        OPENSSL_free(packet.eph_user_id);
-        OPENSSL_free(packet.encrypted_data);
         return -1;
     }
     return 0;
@@ -1207,12 +1300,57 @@ int process_auth_response(const u8 *in, size_t in_len, struct rp_data *data) {
     // Access the database
     struct credential cred;
     char *rp_id;
-    if (get_credential(data->db, packet.user_id, packet.user_id_len,
-                       packet.cred_id, packet.cred_id_len, &cred,
-                       &rp_id) != 0) {
-        debug_printf(DEBUG_LEVEL_ERROR,
-                     "Failed to get credential from database");
-        sqlite3_close(data->db);
+    bool allowed = false;
+    if (data->ceremony == AUTHENTICATION_SERVER_SIDE_CRED_CEREMONY){
+        if(packet.user_handle_len == 64){
+            if( data->user_id_len != packet.user_handle_len || memcmp(data->user_id, packet.user_handle, data->user_id_len) != 0){
+                return -1;
+            }
+        }
+        else if(packet.user_handle_len != 0){
+            return -1;
+        }
+        for(size_t i = 0; i< data->allow_credentials_len; i++){
+            const struct public_key_credential_descriptor *allowed_credential = &data->allow_credentials[i];
+            if(allowed_credential->id_len == packet.cred_id_len && memcmp(allowed_credential->id, packet.cred_id, packet.cred_id_len) == 0) {
+                allowed = true;
+                break;
+            }
+        }
+        if(!allowed) {
+            debug_printf(DEBUG_LEVEL_ERROR, "Returned credential ID is not in the request's allow list");
+            return -1;
+        }
+        if (get_credential(data->db, data->user_id, data->user_id_len,
+                           packet.cred_id, packet.cred_id_len, &cred,
+                           &rp_id) != 0) {
+            debug_printf(DEBUG_LEVEL_ERROR,
+                         "Failed to get credential from database");
+            sqlite3_close(data->db);
+            return -1;
+        }
+    }
+    else if (data->ceremony == AUTHENTICATION_DISCOVERABLE_CEREMONY) {
+        if (packet.user_handle_len != 64) {
+            return -1;
+        }
+
+        if (get_credential(data->db, packet.user_handle, packet.user_handle_len,
+                           packet.cred_id, packet.cred_id_len, &cred,
+                           &rp_id) != 0) {
+            debug_printf(DEBUG_LEVEL_ERROR,
+                         "Failed to get credential from database");
+            sqlite3_close(data->db);
+            return -1;
+        }
+    }
+    else{
+        debug_printf(DEBUG_LEVEL_ERROR, "Unknown ceremony");
+        return -1;
+    }
+
+    if(strcmp(rp_id, data->rp_id) != 0){
+        debug_printf(DEBUG_LEVEL_ERROR, "Stored credential belongs to a different RP ID");
         return -1;
     }
 
@@ -1260,9 +1398,13 @@ int process_auth_response(const u8 *in, size_t in_len, struct rp_data *data) {
     // Set the number of assertions to 1. We only have one credential to
     // verify.
     fido_assert_set_count(assert, 1);
+
     fido_assert_set_authdata_raw(assert, 0, packet.authdata,
                                  packet.authdata_len);
     fido_assert_set_sig(assert, 0, packet.signature, packet.signature_len);
+   
+    // Set the user presence. The following assertion can only be accepted if the User Presence Bit is set.
+    fido_assert_set_up(assert, FIDO_OPT_TRUE );
 
     // Verify the signature
     if (fido_assert_verify(assert, 0, FIDOSSL_COSE_ES256, pk->es256) != FIDO_OK) {

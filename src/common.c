@@ -392,10 +392,12 @@ int get_message_iv(enum packet_type type, u8 *iv, size_t iv_len){
         default:
             debug_printf(DEBUG_LEVEL_ERROR, "Enryption is not used for this message type");
             return -1;
-        //case PKT_AUTH_IDENT_SERVER_SIDE:
-        //.   memcpy(iv, "messagetype7", FIDOSSL_GCM_IV_LEN);
-        //.   break
-        //
+        case PKT_AUTH_INDICATION_SERVER_SIDE:
+            memcpy(iv, "messagetype7", iv_len);
+            break;
+        case PKT_AUTH_REQUEST:
+            memcpy(iv, "messagetype8", iv_len);
+            break;
     }
     return 0;
 }

@@ -66,14 +66,25 @@ typedef enum cose_alg_identifier{
     FIDOSSL_COSE_RS1 = -65535
 } COSE_ALG_ID;
 
+// Der Zeremonietype wird getrennt vom Protokollzustand gespeicher, damit nach der PreResponse
+// zwischen Registrierung und Authentifizierung mit den serverseitigen Credentials unterschieden werden kann
 
+enum ceremony_mode {
+    UNDEFINED_CEREMONY,
+    REGISTRATION_CEREMONY,
+    AUTHENTICATION_SERVER_SIDE_CRED_CEREMONY,
+    AUTHENTICATION_DISCOVERABLE_CEREMONY
+};
 
 
 enum fido_state {
     STATE_INITIAL,
-    STATE_AUTH_INITIAL,
-    STATE_AUTH_INDICATION_SENT,
-    STATE_AUTH_INDICATION_RECEIVED,
+    STATE_AUTH_INITIAL_DISCOVERABLE,
+    STATE_AUTH_INITIAL_SERVER_SIDE,
+    STATE_AUTH_INDICATION_DISCOVERABLE_SENT,
+    STATE_AUTH_INDICATION_DISCOVERABLE_RECEIVED,
+    STATE_AUTH_INDICATION_SERVER_SIDE_SENT,
+    STATE_AUTH_INDICATION_SERVER_SIDE_RECEIVED,
     STATE_AUTH_REQUEST_SENT,
     STATE_AUTH_REQUEST_RECEIVED,
     STATE_AUTH_RESPONSE_SENT,
@@ -103,16 +114,16 @@ enum packet_type {
     PKT_REG_INDICATION = 3,
     PKT_REG_REQUEST = 4,
     PKT_REG_RESPONSE = 5,
-    PKT_AUTH_INDICATION = 6,
-    PKT_AUTH_REQUEST = 7,
-    PKT_AUTH_RESPONSE = 8,
-    //added a new packet type for the CBOR array inside of
-    //registration indication
-    PKT_ENCRYPTED_DATA = 10,
+    //Now there are two authentication indication types, according to the I-D
+    PKT_AUTH_INDICATION_DISCOVERABLE = 6,
+    PKT_AUTH_INDICATION_SERVER_SIDE = 7,
+    PKT_AUTH_REQUEST = 8,
+    PKT_AUTH_RESPONSE = 9,
 };
 
 struct rp_data {
     enum fido_state state;
+    enum ceremony_mode ceremony;
     u8 *challenge;
     size_t challenge_len;
     char *rp_id;
@@ -141,10 +152,13 @@ struct rp_data {
     u8 *ticket;
     size_t ticket_len;
     sqlite3 *db;
+    struct public_key_credential_descriptor *allow_credentials;
+    size_t allow_credentials_len;
 };
 
 struct ud_data {
     enum fido_state state;
+    enum ceremony_mode ceremony;
     u8 *challenge;
     size_t challenge_len;
     char *rp_id;
@@ -192,6 +206,8 @@ struct ud_data {
     struct pub_key_cred_param *pub_key_cred_params;
     size_t pub_key_cred_params_len;
 
+    struct public_key_credential_descriptor *allow_credentials;
+    size_t allow_credentials_len;
 
     u8 *encrypted_array;
     struct public_key_credential_descriptor *exclude_credentials;
@@ -235,16 +251,27 @@ struct authdata {
     size_t pubkey_len;
 };
 
+struct auth_indication_server_side{
+    u8 *eph_user_id;
+    size_t eph_user_id_len;
+    u8 *encrypted_user_name;
+    size_t encrypted_user_name_len;
+};
+
 struct auth_request {
     // Required fileds
     u8 *challenge;
     size_t challenge_len;
+    u8 *encrypted_allow_credentials;
+    size_t encrypted_allow_credentials_len;
 
     // Optional fields
     char *rp_id; 
     //TODO
     USER_VERIF_REQ user_verification;
     int timeout;
+    struct extension *extensions;
+    size_t extensions_len;
 };
 
 struct auth_response {
@@ -257,8 +284,8 @@ struct auth_response {
     size_t signature_len;
 
     // Optional fields
-    u8 *user_id; 
-    size_t user_id_len;
+    u8 *user_handle; 
+    size_t user_handle_len;
     u8 *cred_id;
     size_t cred_id_len;
 };
