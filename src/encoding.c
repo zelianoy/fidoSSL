@@ -56,6 +56,17 @@ int base64url_encode(const u8 *input, size_t input_len, char** output) {
         if (*p == '+') *p = '-';
         else if (*p == '/') *p = '_';
     }
+    // Remove the trailing '='
+    size_t output_len = strlen(*output);
+    for (size_t i = output_len; i > 0; i-- ) {
+        if ((*output)[i - 1] == '=') {
+            output_len--;  
+        }
+        else {
+            break;
+        }
+    }
+    (*output)[output_len] = '\0';  
     return 0;
 }
 
@@ -63,8 +74,16 @@ int base64url_decode(const char *input, u8 **output, size_t *output_len) {
     // Calculate length of the input string
     size_t len = strlen(input);
 
+    // Base64 encodes each group of 3 bytes as 4 characters;
+    // The input length modulo 4 determines how many '=' padding characters must be restored before decoding. 
+    // Thus we can notice whether the last group of 4 chars was complete or not.
+    size_t padding_num = len % 4;
+    if (padding_num == 1) {
+        return -1;
+    }
+
     // Allocate a temporary buffer for the modified input
-    char *modifiedInput = (char *)malloc(len + 1); // +1 for null terminator
+    char *modifiedInput = (char *)malloc(len + padding_num + 1); //+padding_num for the '=' chars and +1 for null terminator
     if (!modifiedInput) {
         return -1;
     }
@@ -76,6 +95,16 @@ int base64url_decode(const char *input, u8 **output, size_t *output_len) {
     for (size_t i = 0; i < len; ++i) {
         if (modifiedInput[i] == '-') modifiedInput[i] = '+';
         else if (modifiedInput[i] == '_') modifiedInput[i] = '/';
+    }
+    
+    if (padding_num == 2) {
+        modifiedInput[len] = '=';
+        modifiedInput[len+1] = '=';
+        modifiedInput[len+2] = '\0';
+    }
+    else if (padding_num == 3) {
+        modifiedInput[len] = '=';
+        modifiedInput[len+1] = '\0';
     }
 
     // Use the base64_decode function on the modified input
