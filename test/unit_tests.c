@@ -333,15 +333,13 @@ int test_reg_request_padding_and_rtp(){
     exclude_credential[0].type = PUBLIC_KEY;
     exclude_credential[0].id = credential_id;
     exclude_credential[0].id_len = 16;
-    exclude_credential[0].transports = NULL;
-    exclude_credential[0].transports_len = 0;
+
 
 
     exclude_credential[1].type = PUBLIC_KEY;
     exclude_credential[1].id = credential_id1;
     exclude_credential[1].id_len = 16;
-    exclude_credential[1].transports = NULL;
-    exclude_credential[1].transports_len = 0;
+
 
 
 
@@ -450,27 +448,7 @@ int test_reg_request_padding_and_rtp(){
     debug_print_hex(DEBUG_LEVEL_VERBOSE, 
                  "    user name after parsing: ", encrypted_data1->padded_user_name, encrypted_data1->padded_user_name_len); 
    
-    debug_print_hex(DEBUG_LEVEL_VERBOSE, 
-                 "    user display name after parsing: ", encrypted_data1->padded_user_display_name, encrypted_data1->padded_user_display_name_len); 
- 
-    debug_print_hex(DEBUG_LEVEL_VERBOSE, 
-                 "    user id after parsing: ", encrypted_data1->user_id, encrypted_data1->user_id_len); 
-
-    debug_print_hex(DEBUG_LEVEL_VERBOSE, 
-                 "    first exclude credential id after parsing: ", encrypted_data1->exclude_credentials[0].id, encrypted_data1->exclude_credentials[0].id_len); 
-
-    debug_print_hex(DEBUG_LEVEL_VERBOSE, 
-                 "    first exclude credentials transports after parsing: ", encrypted_data1->exclude_credentials[0].transports, encrypted_data1->exclude_credentials[0].transports_len); 
-
-
-    debug_print_hex(DEBUG_LEVEL_VERBOSE, 
-                 "    second exclude credential id after parsing: ", encrypted_data1->exclude_credentials[1].id, encrypted_data1->exclude_credentials[1].id_len); 
-
-    debug_print_hex(DEBUG_LEVEL_VERBOSE, 
-                 "    second exclude credential transports after parsing: ", encrypted_data1->exclude_credentials[1].transports, encrypted_data1->exclude_credentials[1].transports_len); 
-
-
-
+  
     if(encrypted_data1->padded_user_display_name_len == padded_len &&
        encrypted_data1->padded_user_name_len == padded_len && encrypted_data1->user_id_len == id_len){
         if(memcmp(encrypted_data1->padded_user_display_name, padded_user_display_name, padded_len) != 0 || 

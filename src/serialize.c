@@ -375,9 +375,9 @@ int cbor_parse(const u8 *in_buf, size_t in_len, enum packet_type *type, void *ou
         //If the message contains 6 elements we must check, whether we are at the end of the array and exit properly orr display an error
         if(array_len == 6){
             if(!cbor_value_at_end(&it)){
-                return -1;
-                break;       
+                return -1;    
             }
+            break;
         }
         //else then process the optional map 
         if (!cbor_value_is_map(&it)) {

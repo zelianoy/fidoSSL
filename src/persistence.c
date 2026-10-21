@@ -216,8 +216,8 @@ int get_credential_descriptors(sqlite3 *db, const u8 *user_id, size_t user_id_le
         }
         cred->type = PUBLIC_KEY;   
         //Zuerst bewusst die Transport-Liste weglassen, weil die standartkonforme Entwicklung mit einem YubiKy erwartet wird
-        cred->transports_len = 0;
-        cred->transports = NULL;
+        //cred->transports_len = 0;
+        //cred->transports = NULL;
         (*creds_len)++;
     }
     debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Number of excluded credentials: %zu",

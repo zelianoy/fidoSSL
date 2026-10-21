@@ -72,7 +72,9 @@ int main() {
     opts->rp_name = "Demo Fido2 TLS";
     opts->ticket_b64 = "XSQrGrqft2dkPdWBKqkAT86wmQCGE2xZh8ODh7FTADxv17q7a9sWdCSsWysPTElhSGvtZEc6Ejp257ju6fcCT4aoSXSlgIlqRNId0htgesEHmCKMRwoytZugYjr2gbCDErHsCHVhZAaFfHb6SueZ+tGINFrGMyGk2HYnM8Jvnofp0AJYkBu9t76h4cMfMKBZdtAvIOlvoo4i9UaZOVyjff2jSd/sTILAHzUqtj85Ipp8yecanqUPVkwBAXGlvjBYmnPvnOKcxGLXmetOkOYG8Q6s4e8LeHdGsF8sFypv+lL2g+L+/YBLaKlsys2aABbaXP6evVp3/7ACEkdTHpreuA==";
     opts->user_verification = UV_PREFERRED;
-    opts->resident_key = RK_REQUIRED;
+    //When a client wants to create a non resident key, this field must be set to RK_DISCOURAGED
+    //otherwise RK_REQUIRED
+    opts->resident_key = RK_DISCOURAGED;
     opts->auth_attach = CROSS_PLATFORM;
     opts->transport = USB;
     opts->timeout = 60000; // 1 Minute

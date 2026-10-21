@@ -180,13 +180,10 @@ char *get_effective_domain(SSL *ssl){
     }
 }
 
-
-
-
-//TODO
 int is_equal_or_registrable_domain_suffix(const char *host,
                                           const char *host_suffix) {
 
+    int result;                                        
     //Reject empty domains
     if(host == NULL || host_suffix == NULL){
         return -1;
@@ -202,10 +199,9 @@ int is_equal_or_registrable_domain_suffix(const char *host,
     }
     char *host_suffix_cpy = OPENSSL_zalloc(host_suffix_len +1);
     if(!host_suffix_cpy){
-        OPENSSL_free(host_cpy);
-        return -1;
+        result = -1;
+        goto end;
     }
-
 
     for(size_t i = 0; i< host_len; i++){
         host_cpy[i] = tolower((unsigned char)host[i]);
@@ -215,36 +211,37 @@ int is_equal_or_registrable_domain_suffix(const char *host,
         host_suffix_cpy[i] = tolower((unsigned char)host_suffix[i]);
     }
 
-
     if(strcmp(host_cpy, host_suffix_cpy) == 0){
-        OPENSSL_free(host_cpy);
-        OPENSSL_free(host_suffix_cpy);
-        return 0;
+        result = 0;
+        goto end;
     }
 
     //return an error if the given rp_id is a public suffix
     const psl_ctx_t *psl = psl_builtin();  
     if(!psl) {
         return -1;
-    }                                     
+    }  
+
     if(psl_is_public_suffix2(psl, host_suffix_cpy, PSL_TYPE_ANY)){
-        OPENSSL_free(host_cpy);
-        OPENSSL_free(host_suffix_cpy);
-        return -1;
+        result = -1;
+        goto end;
     }      
 
     if(strcmp(host_cpy + (host_len - host_suffix_len), host_suffix_cpy) == 0 && host_cpy[host_len - host_suffix_len - 1] == '.'){
-        OPENSSL_free(host_cpy);
-        OPENSSL_free(host_suffix_cpy);
-        return 0;
+        result = 0;
+        goto end;
     }
     else{
+        result = -1;
+        goto end;
+    } 
+
+    end:
         OPENSSL_free(host_cpy);
         OPENSSL_free(host_suffix_cpy);
-        return -1;
-    } 
+        return result;
 }
-//TODO
+
 int validate_rp_id(SSL *ssl, const char *effective_domain, const char *rp_id) {
     if (!ssl || !effective_domain) {
         return -1;
@@ -366,7 +363,12 @@ fido_cred_t *create_fido_cred_t(struct ud_data *data) {
         }
         debug_printf(DEBUG_LEVEL_MORE_VERBOSE,
                      "    Discoverable credentials: TRUE");
-    } else {
+    } else if (data->resident_key == RK_DISCOURAGED) {
+        if (fido_cred_set_rk(cred, FIDO_OPT_FALSE) != FIDO_OK) {
+            debug_printf(DEBUG_LEVEL_ERROR, "Failed to request non-resident key");
+            fido_cred_free(&cred);
+            return NULL;
+        }
         debug_printf(DEBUG_LEVEL_MORE_VERBOSE,
                      "    Discoverable credentials: FALSE");
     }

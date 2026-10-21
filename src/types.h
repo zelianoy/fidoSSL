@@ -319,18 +319,19 @@ struct public_key_credential_descriptor{
     enum credential_type type;
     u8 *id;
     size_t id_len;
-    enum transport *transports; // e.g. [ USB, NFC ]
-    size_t transports_len;
 };
 
 
 struct reg_request_encrypted_data{
     u8 *padded_user_name;
     size_t padded_user_name_len;
+
     u8 *padded_user_display_name;
     size_t padded_user_display_name_len;
+
     u8 *user_id;
     size_t user_id_len;
+    
     struct public_key_credential_descriptor *exclude_credentials;
     size_t exclude_credentials_len;
 };
@@ -339,7 +340,6 @@ struct reg_request_encrypted_data{
 
 struct pub_key_cred_param{
     enum credential_type type;
-    //Because libfido2 library already defines the COSE algorithms as macros
     int alg;
 };
 
@@ -357,7 +357,6 @@ struct reg_request {
     struct pub_key_cred_param *pub_key_cred_params;
     size_t pub_key_cred_params_len;
     
-   
     // Optional fields
     uint32_t timeout;
     struct authenticator_sel {
@@ -368,8 +367,6 @@ struct reg_request {
     enum attestation_conveyance_preference attestation;
     struct extension *extensions;
     size_t extensions_len;
-
-
 };
 
 
@@ -377,6 +374,7 @@ struct reg_request {
 struct extension {
     char *extension_id;
     size_t extension_id_len;
+
     u8 *extension_data;
     size_t extension_data_len;
 };
@@ -385,6 +383,7 @@ struct extension {
 struct reg_response {
     u8 *attestation_object;
     size_t attestation_object_len;
+
     char *clientdata_json;
     size_t clientdata_json_len;
 };

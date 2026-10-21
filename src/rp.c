@@ -475,7 +475,7 @@ es256_pk_t *get_public_key(const u8 *cose_key, size_t cose_key_len) {
 
     return pk;
 }
-//TODO
+
 int verify_clientdata(struct rp_data *data, const char *clientdata_json,
     const size_t clientdata_json_len,  enum fido_mode mode) {
     // We could drop the JSON dependency here and parse the client data manually.
@@ -1016,12 +1016,12 @@ int process_indication(const u8 *in, size_t in_len, struct rp_data *data) {
                 if(cbor_parse_encrypted_data(cbor_array_decrypted, cbor_array_decrypted_len, &encrypted_data)!=0){
                     return -1;
                 }
-                char *unpadded_data = OPENSSL_malloc(257 * sizeof(*unpadded_data));
-                if (unpadded_data == NULL){
+                char *unpadded_user_display_name = OPENSSL_malloc(257 * sizeof(*unpadded_user_display_name));
+                if (unpadded_user_display_name == NULL){
                     return -1;
                 }
-                size_t unpadded_data_len = 0 ;
-                if(remove_bit_padding(unpadded_data, encrypted_data.padded_user_display_name, &unpadded_data_len)!=0){
+                size_t unpadded_user_display_name_len_len = 0 ;
+                if(remove_bit_padding(unpadded_user_display_name, encrypted_data.padded_user_display_name, &unpadded_user_display_name_len_len)!=0){
                     return -1;
                 }
                 if (data->ticket_len != encrypted_data.ticket_len ||
@@ -1033,9 +1033,10 @@ int process_indication(const u8 *in, size_t in_len, struct rp_data *data) {
                
                 //According to the I-D, the user name may be the same as the user display name
                 //Thus this implementation uses this design choice
-                data->user_display_name = unpadded_data;
+                data->user_display_name = unpadded_user_display_name;
                 char *unpadded_data_copy = OPENSSL_malloc(257 * sizeof(*unpadded_data_copy));
-                memcpy(unpadded_data_copy, unpadded_data, unpadded_data_len + 1);
+                memcpy(unpadded_data_copy, unpadded_user_display_name, unpadded_user_display_name_len_len + 1);
+                
                 data->user_name = unpadded_data_copy;
                 data->ceremony = REGISTRATION_CEREMONY;
                 data->state = STATE_REG_INDICATION_RECEIVED;
@@ -1215,7 +1216,6 @@ int process_reg_response(const u8 *in, size_t in_len, struct rp_data *data) {
     if(fido_cred_x5c_list_count(server_side_credential) == 0){
         return -1;
     }
-
     const unsigned char *leaf_cert = fido_cred_x5c_list_ptr(server_side_credential, 0);
     size_t leaf_cert_len = fido_cred_x5c_list_len(server_side_credential, 0);
     if(leaf_cert == NULL || leaf_cert_len == 0){

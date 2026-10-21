@@ -34,8 +34,6 @@ typedef struct fidossl_client_opts {
         FIDOSSL_AUTHENTICATE_DISCOVERABLE,
         FIDOSSL_AUTHENTICATE_SERVER_SIDE
     } mode;
-//In the I-D the RP is choosing the user name, thus we wont use this field anymore soon. Temporary the field stays there but wont be used
-//
     char *user_name;
     char *user_display_name;
     char *ticket_b64;

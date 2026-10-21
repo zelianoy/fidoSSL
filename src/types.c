@@ -1,6 +1,5 @@
 #include "types.h"
 #include <openssl/crypto.h>
-//TODO: Speicherbereinigung vervollständigen
 void free_rp_data(struct rp_data *rp_data) {
     OPENSSL_free(rp_data->challenge);
     OPENSSL_free(rp_data->rp_id);
@@ -38,8 +37,6 @@ void free_ud_data(struct ud_data *ud_data) {
     if (ud_data->exclude_credentials != NULL && ud_data->exclude_credentials_len > 0) {
         for (size_t i = 0; i < ud_data->exclude_credentials_len; i++) {
             OPENSSL_free(ud_data->exclude_credentials[i].id);
-            OPENSSL_free(ud_data->exclude_credentials[i].transports);
-            //OPENSSL_free(ud_data->exclude_credentials[i].pubkey_cose);
         }
     }
     OPENSSL_free(ud_data->exclude_credentials);
