@@ -1079,7 +1079,6 @@ int process_indication(const u8 *in, size_t in_len, struct rp_data *data) {
                     debug_printf(DEBUG_LEVEL_ERROR, "Failed to parse authentiification indication");     
                     return -1;
                 }
-                
                     if (data->eph_user_id_len != packet.eph_user_id_len) {
                         debug_printf(DEBUG_LEVEL_ERROR, "Unknown ephemeral user id");
                         return -1;
@@ -1310,7 +1309,7 @@ int process_auth_response(const u8 *in, size_t in_len, struct rp_data *data) {
         else if(packet.user_handle_len != 0){
             return -1;
         }
-        for(size_t i = 0; i< data->allow_credentials_len; i++){
+        for(size_t i = 0; i < data->allow_credentials_len; i++){
             const struct public_key_credential_descriptor *allowed_credential = &data->allow_credentials[i];
             if(allowed_credential->id_len == packet.cred_id_len && memcmp(allowed_credential->id, packet.cred_id, packet.cred_id_len) == 0) {
                 allowed = true;
@@ -1334,6 +1333,7 @@ int process_auth_response(const u8 *in, size_t in_len, struct rp_data *data) {
         if (packet.user_handle_len != 64) {
             return -1;
         }
+
 
         if (get_credential(data->db, packet.user_handle, packet.user_handle_len,
                            packet.cred_id, packet.cred_id_len, &cred,

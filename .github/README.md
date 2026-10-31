@@ -6,6 +6,16 @@
 
 This project serves as a foundational draft for further studies and development in the realm of secure communications. It was presented as a master’s thesis at Humboldt University of Berlin. The full thesis can be accessed [here](https://sar.informatik.hu-berlin.de/research/publications/index.htm#SAR-PR-2024-02).
 
+The implementation in this repository was further developed as
+part of a bachelor's thesis, based on David
+Wedekind's Internet-Draft for the FIDO2 TLS 1.3 Extension.
+
+The changes include revised CBOR message formats, adapted
+handshake processing, and support for authentication using
+server-side credential selection. The implementation supports
+registration of both discoverable and non-discoverable
+credentials, as well as authentication with discoverable credentials or server-side credentials.
+
 ### Features
 
 - Implements FIDO2 authentication within the TLS protocol
@@ -34,7 +44,9 @@ While Docker and containerization offer numerous benefits for application deploy
 
 Application build ontop of TLS often dependent on the ability to interact closely with network adapters and hardware. Docker's network abstraction, designed to isolate and secure container environments, can limit direct access to the network hardware. Such limitations can be restrictive for applications that need to manage or modify network traffic or require detailed information about the network's physical layer for optimal operation.
 
-To fulfill the project's requirements for isolation and reproducibility without relying on Docker, a `install-dependencies.sh` script is employed. This script ensures all dependencies are downloaded and built from source, providing maximal compatibility and reproducibility across different systems. Dependencies are **installed locally** within the project's directory, maintaining isolation by avoiding conflicts with system-wide libraries. The make system, with the help of `pkg-config`, link against libraries either installed system-wide or locally within the project directory. This means if you already have certain dependencies installed globally, there is no need to install them again locally.
+To fulfill the project's requirements for isolation and reproducibility without relying on Docker, a `install-dependencies.sh` script is employed. This script downloads and builds selected dependencies from source.
+The additional dependency libpsl must be installed separately
+using the system's package manager. Dependencies are **installed locally** within the project's directory, maintaining isolation by avoiding conflicts with system-wide libraries. The make system, with the help of `pkg-config`, link against libraries either installed system-wide or locally within the project directory. This means if you already have certain dependencies installed globally, there is no need to install them again locally.
 
 ##### Option 1: Local installation with script:
 
@@ -57,7 +69,7 @@ On macOS, the dependencies can be installed with [homebrew](https://brew.sh/)
 brew update
 
 # Install dependencies
-brew install openssl libfido2 sqlite jansson libpsl pkg-config
+brew install openssl libfido2 sqlite jansson libpsl pkg-config cmake 
 ```
 
 ###### ubuntu
@@ -69,7 +81,15 @@ On Ubuntu, dependencies can be installed with [aptitude](https://wiki.ubuntuuser
 sudo apt update
 
 # Install dependencies
-sudo apt install build-essential libssl-dev libfido2-dev libsqlite3-dev libjansson-dev libpsl-dev
+sudo apt install build-essential libssl-dev libfido2-dev libsqlite3-dev libjansson-dev libpsl-dev cmake pkg-config curl unzip
+```
+
+For either package-manager installation above, TinyCBOR can
+additionally be built locally using the provided script.
+Run this command from the repository root:
+
+```sh
+bash ./install-dependencies.sh tinycbor
 ```
 
 #### Building the Static Library
@@ -102,7 +122,7 @@ LIBS += $(shell pkg-config --libs fidossl)
 
 # Without pkg-config
 CFLAGS+= -I/path/to/fidossl/headers 
-LIBS += -L/path/to/fidossl/library -lfidossl -lssl -lcrypto -lfido2 -ltinycbor -ljansson
+LIBS += -L/path/to/fidossl/library -lfidossl -lssl -lcrypto -lfido2 -ltinycbor -ljansson -lsqlite3 -lpsl
 ```
 
 If the **dependencies are in non-standard locations**, you can use the `PKG_CONFIG_PATH` environment variable to point to the location of the `.pc` file.
@@ -143,15 +163,16 @@ if (opts == NULL) {
 // Modes are: FIDOSSL_REGISTER, FIDOSSL_AUTHENTICATE_DISCOVERABLE OR FIDOSSL_AUTHENTICATE_SERVER_SIDE
 opts->mode = FIDOSSL_REGISTER;
 
-// Define a user and user display name.
-// When in FIDOSSL_AUTHENTICATE mode, this setting is ignored.
-opts->user_name = "alice";
+// FIDOSSL_REGISTER uses user_display_name; the server also uses it as user_name.
+// When in FIDOSSL_AUTHENTICATE_SERVER_SIDE a registered user_name is required. When in FIDOSSL_AUTHENTICATE_DISCOVERABLE this setting is ignored
+// Discoverable authentication does not require a user_name.
+opts->user_name = "Alice";
 opts->user_display_name = "Alice";
 
 // In FIDOSSL_REGISTER mode, new fido keys are only enrolled if the client provides a valid ticket.
 // Client and Server must be configured with the same ticket. The ticket is base64 encoded.
-// When in FIDOSSL_AUTHENTICATE mode, this option is ignored.
-opts->ticket_b64 = "y1v2BsTzi6baajWpU5WSDw6AYorx2MSDO1iVFSQC8VQ=";
+opts->ticket_b64 = "XSQrGrqft2dkPdWBKqkAT86wmQCGE2xZh8ODh7FTADxv17q7a9sWdCSsWysPTElhSGvtZEc6Ejp257ju6fcCT4aoSXSlgIlqRNId0htgesEHmCKMRwoytZugYjr2gbCDErHsCHVhZAaFfHb6SueZ+tGINFrGMyGk2HYnM8Jvnofp0AJYkBu9t76h4cMfMKBZdtAvIOlvoo4i9UaZOVyjff2jSd/sTILAHzUqtj85Ipp8yecanqUPVkwBAXGlvjBYmnPvnOKcxGLXmetOkOYG8Q6s4e8LeHdGsF8sFypv+lL2g+L+/YBLaKlsys2aABbaXP6evVp3/7ACEkdTHpreuA==";
+
 
 // The PIN of the FIDO token.
 opts->pin = "1234";
@@ -174,8 +195,9 @@ SSL_CTX_add_custom_ext(
 // Create an SSL object and proceed with the connection and TLS handshake as usual
 // Remember to configure SNI and handle the connection appropriately
 
-// If we want to register new fido keys, a second handshake is necessary.
-if (opts->mode == FIDOSSL_REGISTER) {
+// If we want to register new fido keys or authenticate with server-side credentials, a second handshake is necessary.
+if (opts->mode == FIDOSSL_REGISTER ||
+    opts->mode == FIDOSSL_AUTHENTICATE_SERVER_SIDE) {
   
     // Shutdown the first connection
     while (SSL_shutdown(ssl) != 1) {}
@@ -196,8 +218,7 @@ if (opts->mode == FIDOSSL_REGISTER) {
     while (SSL_shutdown(ssl) != 1) {}
 }
 
-// The caller is responsible for freeing the client options,
-// the extension keeps no references, all data is copied.
+// Keep the options valid until all handshakes using this SSL_CTX have completed.
 free(opts);
 
 // Remember to also free SSL and SSL_CTX objects, and close the network socket as usual
@@ -227,13 +248,13 @@ opts->rp_name = "My Domain Example";
 
 // Specify the base64 encoded ticket for the FIDO operation. This ticket is crucial for the 
 // FIDO key registration process, acting as a shared secret between the client and server.
-opts->ticket_b64 = "y1v2BsTzi6baajWpU5WSDw6AYorx2MSDO1iVFSQC8VQ=";
+opts->ticket_b64 = "XSQrGrqft2dkPdWBKqkAT86wmQCGE2xZh8ODh7FTADxv17q7a9sWdCSsWysPTElhSGvtZEc6Ejp257ju6fcCT4aoSXSlgIlqRNId0htgesEHmCKMRwoytZugYjr2gbCDErHsCHVhZAaFfHb6SueZ+tGINFrGMyGk2HYnM8Jvnofp0AJYkBu9t76h4cMfMKBZdtAvIOlvoo4i9UaZOVyjff2jSd/sTILAHzUqtj85Ipp8yecanqUPVkwBAXGlvjBYmnPvnOKcxGLXmetOkOYG8Q6s4e8LeHdGsF8sFypv+lL2g+L+/YBLaKlsys2aABbaXP6evVp3/7ACEkdTHpreuA==";
 
-// Values for user verification are: REQUIRED, PREFERRED, DISCOURAGED
-opts->user_verification = PREFERRED;
+// Values for user verification are: UV_REQUIRED, UV_PREFERRED, UV_DISCOURAGED
+opts->user_verification = UV_PREFERRED;
 
-// Resident keys can be: REQUIRED, PREFERRED, DISCOURAGED
-opts->resident_key = REQUIRED;
+// Resident keys can be: RK_REQUIRED, RK_PREFERRED, RK_DISCOURAGED
+opts->resident_key = RK_REQUIRED;
 
 // Authenticator modes: CROSS_PLATFORM, PLATFORM
 opts->auth_attach = CROSS_PLATFORM;
@@ -246,6 +267,9 @@ opts->timeout = 60000; // 1 Minute
 
 // Optional: Debug levels are: DEBUG_LEVEL_ERROR, DEBUG_LEVEL_VERBOSE, DEBUG_LEVEL_MORE_VERBOSE.
 opts->debug_level = DEBUG_LEVEL_MORE_VERBOSE;
+
+//Only direct attestation is supported
+opts->attestation = DIRECT;
 
 // Register the `libfidossl` extension with the SSL context. This step is critical as it
 // integrates FIDO authentication into the TLS handshake process.
@@ -270,20 +294,30 @@ SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, no_ve
 
 // Shut down the SSL connection properly
 
-// The caller is again responsible for freeing the server options,
-// the extension keeps no references, all data is copied.
+// Keep the options valid until all handshakes using this SSL_CTX have completed.
 free(opts);
 ```
 
 ### Testing `fidossl`
 
-To test the fidossl integration, utilize the simple test `server` and `client` located within the `fidoSSL/build` directory.
+Run both programs from the repository root, in separate terminals:
 
-1. Start the test server by executing `./server` in the terminal.
-2. In a new terminal window or tab, launch the test client by running `./client`. 
+1. Start the server with `./build/server`.
+2. Start the client with `./build/client`.
 
 This initiates a TLS handshake with the test server using the fidossl extension, both running on localhost.
 
+Before authenticating, register a credential by selecting
+FIDOSSL_REGISTER in test/client.c. The resident_key setting
+in test/server.c controls the requested credential storage:
+RK_REQUIRED requests a discoverable credential, while
+RK_DISCOURAGED requests a non-discoverable credential.
+
+Rebuild with make after changing the configuration.
+For subsequent authentication, select
+FIDOSSL_AUTHENTICATE_DISCOVERABLE or
+FIDOSSL_AUTHENTICATE_SERVER_SIDE.
+Restart the demonstration server for each new run.
 ### Disclaimer
 
 This codebase, including the `fidoSSL` library and its accompanying utilities, is a **proof of concept** and is primarily intended for **research and development purposes**. It has been made available to the public to foster understanding, experimentation, and further study into integrating FIDO authentication within the TLS 1.3 protocol using OpenSSL.

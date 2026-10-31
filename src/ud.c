@@ -354,7 +354,7 @@ fido_cred_t *create_fido_cred_t(struct ud_data *data) {
     debug_print_hex(DEBUG_LEVEL_MORE_VERBOSE, "    Client data hash: ", hash,
                     SHA256_DIGEST_LENGTH);
 
-    // Set discoverable credentials
+    // Set credentials
     if (data->resident_key == RK_REQUIRED || data->resident_key == RK_PREFERRED) {
         if (fido_cred_set_rk(cred, FIDO_OPT_TRUE) != FIDO_OK) {
             debug_printf(DEBUG_LEVEL_ERROR, "Failed to request resident key");
@@ -657,7 +657,7 @@ int run_ctap(struct ud_data *data, enum fido_mode mode) {
         memcpy(data->signature, fido_assert_sig_ptr(assert_t, 0),
                data->signature_len);
         data->user_id_len = fido_assert_user_id_len(assert_t, 0);
-        if(data->ceremony == AUTHENTICATION_DISCOVERABLE_CEREMONY){
+        if (data->ceremony == AUTHENTICATION_DISCOVERABLE_CEREMONY){
             if (data->user_id_len == 64) {
                 data->user_id = OPENSSL_malloc(data->user_id_len);
                 memcpy(data->user_id, fido_assert_user_id_ptr(assert_t, 0), data->user_id_len);
@@ -676,7 +676,7 @@ int run_ctap(struct ud_data *data, enum fido_mode mode) {
                 data->user_id = NULL;        
             }
             else {
-                debug_printf(DEBUG_LEVEL_ERROR, "The user handle has not allowed size");
+                debug_printf(DEBUG_LEVEL_ERROR, "The user handle has a wrong length");
                 success = false;
             }
         }
@@ -931,7 +931,7 @@ int create_auth_response(struct ud_data *data, SSL *ssl, const u8 **out,
         // the origin.
         if (validate_rp_id(ssl, data->effective_domain, data->rp_id) != 0) {
             debug_printf(DEBUG_LEVEL_ERROR,
-                         "Server provided RPID is no registrable domain suffix "
+                         "Server provided RP-ID is not a registrable domain suffix "
                          "of the server certificate SNI or effective domain");
             return -1;
         }

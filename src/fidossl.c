@@ -256,7 +256,7 @@ int fidossl_server_add_cb(
                 break;
             case STATE_AUTH_INDICATION_DISCOVERABLE_RECEIVED:
                 if (create_auth_request(data, out, outlen) != 0) {
-                    debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to create authentication request");
+                    debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to create request for discoverable authentication");
                     ERR_put_error(ERR_LIB_USER, 0, SSL_AD_ACCESS_DENIED, __FILE__, __LINE__);
                     *al = SSL_AD_ACCESS_DENIED;
                     return -1;
@@ -265,7 +265,7 @@ int fidossl_server_add_cb(
                 break;
             case STATE_AUTH_INDICATION_SERVER_SIDE_RECEIVED:
                 if (create_auth_request(data, out, outlen) != 0) {
-                    debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to create authentication request");
+                    debug_printf(DEBUG_LEVEL_MORE_VERBOSE, "Failed to create request for authentication with server-side credentials");
                     ERR_put_error(ERR_LIB_USER, 0, SSL_AD_ACCESS_DENIED, __FILE__, __LINE__);
                     *al = SSL_AD_ACCESS_DENIED;
                     return -1;
